@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Usage: peek [<path>[:line[:col]]]  (no arg = peek .)
+set -euo pipefail
+
+APP_PATH="$HOME/Applications/Peeky.app"
+raw_arg="${1:-.}"
+
+expand_path() {
+  local p="$1"
+  if [[ "$p" == "~" ]]; then
+    p="$HOME"
+  elif [[ "$p" == "~/"* ]]; then
+    p="$HOME/${p#~/}"
+  fi
+  if [[ "$p" != /* ]]; then
+    if [[ "$p" == "." ]]; then
+      p="$PWD"
+    else
+      p="$PWD/$p"
+    fi
+  fi
+  printf '%s' "$p"
+}
+
+urlencode() {
+  local py=python3
+  if [[ -x /usr/bin/python3 ]]; then
+    py=/usr/bin/python3
+  fi
+  "$py" -c '
+import sys
+from urllib.parse import quote
+print(quote(sys.argv[1], safe=""))
+' "$1"
+}
+
+abs_arg="$(expand_path "$raw_arg")"
+
+target="$abs_arg"
+line=""
+column=""
+
+if [[ ! -e "$abs_arg" ]]; then
+  if [[ "$abs_arg" =~ ^(.+):([1-9][0-9]*)(:([1-9][0-9]*))?$ ]]; then
+    candidate="${BASH_REMATCH[1]}"
+    if [[ -e "$candidate" ]]; then
+      target="$candidate"
+      line="${BASH_REMATCH[2]}"
+      column="${BASH_REMATCH[4]}"
+    fi
+  fi
+fi
+
+if [[ ! -e "$target" ]]; then
+  echo "peek: no such path: $raw_arg" >&2
+  exit 1
+fi
+
+if [[ ! -d "$APP_PATH" ]]; then
+  echo "peek: Peeky.app not found at $APP_PATH; run: bash scripts/build-app.sh --install" >&2
+  exit 1
+fi
+
+encoded_path="$(urlencode "$target")"
+encoded_cwd="$(urlencode "$PWD")"
+
+url="peeky://open?path=${encoded_path}&cwd=${encoded_cwd}"
+if [[ -n "$line" ]]; then
+  url="${url}&line=${line}"
+fi
+if [[ -n "$column" ]]; then
+  url="${url}&column=${column}"
+fi
+
+open -a "$APP_PATH" "$url"
+
+display="$target"
+if [[ -n "$line" ]]; then
+  display="${display}:${line}"
+  if [[ -n "$column" ]]; then
+    display="${display}:${column}"
+  fi
+fi
+
+echo "peek → ${display}"
