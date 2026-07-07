@@ -24,6 +24,7 @@
 - 提交粒度 plan 级，用户批准后 commit；不主动 push。
 
 ## 手动验收清单（转型期）
+- **任何 UI/渲染改动须在浅色与深色两种外观下各过一遍**（系统外观切换或 `defaults write -g AppleInterfaceStyle`）；颜色类改动另需两外观 resolve 亮度断言（背景/前景对比方向正确）
 - `swift run Peeky <md>` → 弹出即读，Markdown 大纲侧栏可点
 - `<json>` / `<jsonl>` → 格式化 + 折叠 toggle + 坏行红标
 - `.app` bundle 后 `open "peeky://open?path=...&line=N"` → 打开并定位到行

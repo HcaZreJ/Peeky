@@ -195,12 +195,16 @@ private final class MarkdownOutlineItemView: NSControl {
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(titleLabel)
 
-        let leadingInset = 6 + CGFloat(level - 1) * 10
+        // 左对齐；x 起点 = 12 + (level-1)*12（相对侧栏左缘）。sidebarStack 自身已带 8pt
+        // 左内边距，itemView 本地再补 4pt 即落在侧栏坐标系的 x=12/24/36...；额外 +2 用于
+        // 抵消 NSTextField 默认 alignmentRect 相对 frame 左右各内缩 2pt 的系统性偏移
+        // （frame.origin.x 才是视觉/dump 关心的真实渲染位置）。
+        let leadingInset = 6 + CGFloat(level - 1) * 12
         NSLayoutConstraint.activate([
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leadingInset),
-            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 26)
+            heightAnchor.constraint(equalToConstant: 20)
         ])
 
         updateAppearance()
@@ -260,10 +264,21 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
     private let sidebarScrollView = DropScrollView()
     private let tabListDocumentView = DropContainerView()
     private let sidebarStack = NSStackView()
+    private let tabSectionStack = NSStackView()
+    private let tabHeaderStack = NSStackView()
+    private let tabHeaderLabel = NSTextField(labelWithString: "OPEN")
+    private let tabSectionSeparator = NSBox()
+    private let fileTreeSectionStack = NSStackView()
+    private let fileTreeHeaderStack = NSStackView()
+    private let fileTreeHeaderLabel = NSTextField(labelWithString: "FILES")
+    private let fileTreeDisclosureButton = NSButton()
+    private let fileTreeView = FileTreeView()
     private let tabStack = NSStackView()
     private let outlineSectionStack = NSStackView()
     private let outlineSeparator = NSBox()
-    private let outlineHeaderLabel = NSTextField(labelWithString: "Contents")
+    private let outlineHeaderStack = NSStackView()
+    private let outlineHeaderLabel = NSTextField(labelWithString: "CONTENTS")
+    private let outlineScrollView = NSScrollView()
     private let outlineStack = NSStackView()
     private let contentView = DropContainerView()
     private let headerView = DropHeaderView()
@@ -284,6 +299,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
     private var activeTabID: UUID?
     private var wrapsLines = true
     private var sidebarWidthConstraint: NSLayoutConstraint?
+    private var isFileTreeCollapsed = false
+    /// 当前文件树的根目录；nil 表示尚未打开过任何文件/目录，树区未建立。
+    private var treeRootURL: URL?
 
     var isEmpty: Bool {
         tabs.isEmpty
@@ -321,6 +339,13 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
 
         for request in requests {
             let standardizedURL = request.url.standardizedFileURL
+
+            if standardizedURL.hasDirectoryPath {
+                // 目录请求不产生内容 tab，仅设置/切换树根（TextFileLoader 拒目录的行为保留）。
+                establishTreeRoot(for: standardizedURL)
+                continue
+            }
+
             if let existingIndex = tabs.firstIndex(where: { $0.url.standardizedFileURL == standardizedURL }) {
                 selectedTabID = tabs[existingIndex].id
                 if request.line != nil {
@@ -328,6 +353,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
                     tabs[existingIndex].targetLine = request.line
                     tabs[existingIndex].targetColumn = request.column
                 }
+                establishTreeRoot(for: standardizedURL)
                 continue
             }
 
@@ -339,6 +365,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
             }
             tabs.append(tab)
             selectedTabID = tab.id
+            establishTreeRoot(for: standardizedURL)
         }
 
         if let selectedTabID {
@@ -457,38 +484,20 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
 
         sidebarStack.orientation = .vertical
         sidebarStack.alignment = .width
-        sidebarStack.spacing = 10
+        sidebarStack.spacing = 8
         sidebarStack.translatesAutoresizingMaskIntoConstraints = false
         tabListDocumentView.addSubview(sidebarStack)
 
-        tabStack.orientation = .vertical
-        tabStack.alignment = .width
-        tabStack.spacing = 4
-        tabStack.translatesAutoresizingMaskIntoConstraints = false
-        sidebarStack.addArrangedSubview(tabStack)
+        // 区块顺序：OPEN（tab）→ FILES（树）→ CONTENTS（大纲）。
+        setupTabSection()
+        sidebarStack.addArrangedSubview(tabSectionStack)
 
-        outlineSeparator.boxType = .separator
-        outlineSeparator.translatesAutoresizingMaskIntoConstraints = false
+        setupFileTreeSection()
+        sidebarStack.addArrangedSubview(fileTreeSectionStack)
 
-        outlineHeaderLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-        outlineHeaderLabel.textColor = .secondaryLabelColor
-        outlineHeaderLabel.lineBreakMode = .byTruncatingTail
-        outlineHeaderLabel.maximumNumberOfLines = 1
-
-        outlineStack.orientation = .vertical
-        outlineStack.alignment = .width
-        outlineStack.spacing = 2
-        outlineStack.translatesAutoresizingMaskIntoConstraints = false
-
-        outlineSectionStack.orientation = .vertical
-        outlineSectionStack.alignment = .width
-        outlineSectionStack.spacing = 6
-        outlineSectionStack.translatesAutoresizingMaskIntoConstraints = false
-        outlineSectionStack.isHidden = true
-        outlineSectionStack.addArrangedSubview(outlineSeparator)
-        outlineSectionStack.addArrangedSubview(outlineHeaderLabel)
-        outlineSectionStack.addArrangedSubview(outlineStack)
+        setupOutlineSection()
         sidebarStack.addArrangedSubview(outlineSectionStack)
+
         sidebarScrollView.documentView = tabListDocumentView
 
         NSLayoutConstraint.activate([
@@ -507,8 +516,160 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
             sidebarStack.trailingAnchor.constraint(equalTo: tabListDocumentView.trailingAnchor, constant: -8),
             sidebarStack.bottomAnchor.constraint(lessThanOrEqualTo: tabListDocumentView.bottomAnchor, constant: -2),
 
-            outlineSeparator.heightAnchor.constraint(equalToConstant: 1)
+            // 分隔线需要显式 width 绑定到所在分区，否则 NSBox .separator 会退化成其
+            // 极窄的 intrinsic 宽度（视觉上等于没有分隔线）。分区宽度已 == sidebarStack
+            // 宽度，而 sidebarStack 相对 tabListDocumentView 自身左右各留 8pt，分隔线
+            // 因此天然满足"左右各留 8pt 内边距"，无需再额外内缩。
+            tabSectionSeparator.heightAnchor.constraint(equalToConstant: 1),
+            tabSectionSeparator.widthAnchor.constraint(equalTo: tabSectionStack.widthAnchor),
+            outlineSeparator.heightAnchor.constraint(equalToConstant: 1),
+            outlineSeparator.widthAnchor.constraint(equalTo: outlineSectionStack.widthAnchor),
+
+            // 三区标题行左对齐 x=12pt（相对侧栏）：sidebarStack 自身已带 8pt 左内边距，
+            // 标题行在此再补 6pt（4pt 版式内边距 + 2pt 用于抵消标题 NSTextField 的
+            // alignmentRect 系统性左内缩，使 frame.origin.x 落在 12）；右侧留 8pt，
+            // 与分隔线的左右内边距一致。
+            tabHeaderStack.leadingAnchor.constraint(equalTo: tabSectionStack.leadingAnchor, constant: 6),
+            tabHeaderStack.trailingAnchor.constraint(equalTo: tabSectionStack.trailingAnchor, constant: -8),
+            tabStack.widthAnchor.constraint(equalTo: tabSectionStack.widthAnchor),
+            fileTreeHeaderStack.leadingAnchor.constraint(equalTo: fileTreeSectionStack.leadingAnchor, constant: 6),
+            fileTreeHeaderStack.trailingAnchor.constraint(equalTo: fileTreeSectionStack.trailingAnchor, constant: -8),
+            fileTreeView.widthAnchor.constraint(equalTo: fileTreeSectionStack.widthAnchor),
+            outlineHeaderStack.leadingAnchor.constraint(equalTo: outlineSectionStack.leadingAnchor, constant: 6),
+            outlineHeaderStack.trailingAnchor.constraint(equalTo: outlineSectionStack.trailingAnchor, constant: -8),
+            outlineScrollView.widthAnchor.constraint(equalTo: outlineSectionStack.widthAnchor),
+
+            tabSectionStack.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor),
+            fileTreeSectionStack.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor),
+            outlineSectionStack.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor),
+
+            // CONTENTS 高度=内容，上限为侧栏高的 35%，超出时 outlineScrollView 内部滚动。
+            outlineScrollView.heightAnchor.constraint(lessThanOrEqualTo: sidebarView.heightAnchor, multiplier: 0.35)
         ])
+
+        let outlineHuggingHeight = outlineScrollView.heightAnchor.constraint(equalTo: outlineStack.heightAnchor)
+        outlineHuggingHeight.priority = .defaultHigh
+        outlineHuggingHeight.isActive = true
+    }
+
+    /// 「OPEN」tab 分区：小节标题 + 既有 tabStack（卡片样式不变，只挪到侧栏顶部）；
+    /// tabs 为空时整区（含尾部分隔线）隐藏，见 rebuildTabList。
+    private func setupTabSection() {
+        tabHeaderLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        tabHeaderLabel.textColor = .secondaryLabelColor
+        tabHeaderLabel.lineBreakMode = .byTruncatingTail
+        tabHeaderLabel.maximumNumberOfLines = 1
+
+        tabHeaderStack.orientation = .horizontal
+        tabHeaderStack.alignment = .centerY
+        tabHeaderStack.translatesAutoresizingMaskIntoConstraints = false
+        tabHeaderStack.addArrangedSubview(tabHeaderLabel)
+
+        tabStack.orientation = .vertical
+        tabStack.alignment = .width
+        tabStack.spacing = 4
+        tabStack.translatesAutoresizingMaskIntoConstraints = false
+
+        tabSectionSeparator.boxType = .separator
+        tabSectionSeparator.translatesAutoresizingMaskIntoConstraints = false
+
+        tabSectionStack.orientation = .vertical
+        tabSectionStack.alignment = .width
+        tabSectionStack.spacing = 4
+        tabSectionStack.translatesAutoresizingMaskIntoConstraints = false
+        tabSectionStack.isHidden = true
+        tabSectionStack.addArrangedSubview(tabHeaderStack)
+        tabSectionStack.addArrangedSubview(tabStack)
+        tabSectionStack.addArrangedSubview(tabSectionSeparator)
+        tabSectionStack.setCustomSpacing(8, after: tabStack)
+    }
+
+    /// 「FILES」文件树分区：小节标题 + 可折叠 disclosure + FileTreeView。样式沿用既有
+    /// outline 分区（outlineSeparator/outlineHeaderLabel）的字体/颜色约定。
+    private func setupFileTreeSection() {
+        fileTreeHeaderLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        fileTreeHeaderLabel.textColor = .secondaryLabelColor
+        fileTreeHeaderLabel.lineBreakMode = .byTruncatingTail
+        fileTreeHeaderLabel.maximumNumberOfLines = 1
+        fileTreeHeaderLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+
+        fileTreeDisclosureButton.title = ""
+        fileTreeDisclosureButton.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: "Toggle file tree")
+        fileTreeDisclosureButton.imagePosition = .imageOnly
+        fileTreeDisclosureButton.isBordered = false
+        fileTreeDisclosureButton.setButtonType(.momentaryPushIn)
+        fileTreeDisclosureButton.toolTip = "Toggle file tree"
+        fileTreeDisclosureButton.target = self
+        fileTreeDisclosureButton.action = #selector(toggleFileTreeCollapsed(_:))
+        fileTreeDisclosureButton.setContentHuggingPriority(.required, for: .horizontal)
+
+        fileTreeHeaderStack.orientation = .horizontal
+        fileTreeHeaderStack.alignment = .centerY
+        fileTreeHeaderStack.spacing = 4
+        fileTreeHeaderStack.translatesAutoresizingMaskIntoConstraints = false
+        fileTreeHeaderStack.addArrangedSubview(fileTreeHeaderLabel)
+        fileTreeHeaderStack.addArrangedSubview(fileTreeDisclosureButton)
+
+        fileTreeView.translatesAutoresizingMaskIntoConstraints = false
+        fileTreeView.onFileClick = { [weak self] url in
+            self?.open(url: url)
+        }
+
+        fileTreeSectionStack.orientation = .vertical
+        fileTreeSectionStack.alignment = .width
+        fileTreeSectionStack.spacing = 4
+        fileTreeSectionStack.translatesAutoresizingMaskIntoConstraints = false
+        fileTreeSectionStack.isHidden = true
+        fileTreeSectionStack.addArrangedSubview(fileTreeHeaderStack)
+        fileTreeSectionStack.addArrangedSubview(fileTreeView)
+    }
+
+    /// 「CONTENTS」大纲分区：分隔线 + 小节标题 + 可滚动大纲列表。高度随内容，
+    /// 上限为侧栏高度的 35%；超出内部滚动，避免把 FILES 区挤没。非 markdown 文档时
+    /// 整区（含分隔线）隐藏，见 rebuildMarkdownOutline / clearMarkdownOutline。
+    private func setupOutlineSection() {
+        outlineSeparator.boxType = .separator
+        outlineSeparator.translatesAutoresizingMaskIntoConstraints = false
+
+        outlineHeaderLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        outlineHeaderLabel.textColor = .secondaryLabelColor
+        outlineHeaderLabel.lineBreakMode = .byTruncatingTail
+        outlineHeaderLabel.maximumNumberOfLines = 1
+
+        outlineHeaderStack.orientation = .horizontal
+        outlineHeaderStack.alignment = .centerY
+        outlineHeaderStack.translatesAutoresizingMaskIntoConstraints = false
+        outlineHeaderStack.addArrangedSubview(outlineHeaderLabel)
+
+        outlineStack.orientation = .vertical
+        outlineStack.alignment = .width
+        outlineStack.spacing = 0
+        outlineStack.translatesAutoresizingMaskIntoConstraints = false
+
+        outlineScrollView.translatesAutoresizingMaskIntoConstraints = false
+        outlineScrollView.hasVerticalScroller = true
+        outlineScrollView.hasHorizontalScroller = false
+        outlineScrollView.autohidesScrollers = true
+        outlineScrollView.borderType = .noBorder
+        outlineScrollView.drawsBackground = false
+        outlineScrollView.documentView = outlineStack
+
+        NSLayoutConstraint.activate([
+            outlineStack.topAnchor.constraint(equalTo: outlineScrollView.contentView.topAnchor),
+            outlineStack.leadingAnchor.constraint(equalTo: outlineScrollView.contentView.leadingAnchor),
+            outlineStack.trailingAnchor.constraint(equalTo: outlineScrollView.contentView.trailingAnchor),
+            outlineStack.bottomAnchor.constraint(equalTo: outlineScrollView.contentView.bottomAnchor)
+        ])
+
+        outlineSectionStack.orientation = .vertical
+        outlineSectionStack.alignment = .width
+        outlineSectionStack.spacing = 4
+        outlineSectionStack.translatesAutoresizingMaskIntoConstraints = false
+        outlineSectionStack.isHidden = true
+        outlineSectionStack.addArrangedSubview(outlineSeparator)
+        outlineSectionStack.addArrangedSubview(outlineHeaderStack)
+        outlineSectionStack.addArrangedSubview(outlineScrollView)
+        outlineSectionStack.setCustomSpacing(8, after: outlineSeparator)
     }
 
     private func setupHeader() {
@@ -604,6 +765,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         textView.allowsUndo = false
         textView.drawsBackground = true
         textView.backgroundColor = .textBackgroundColor
+        // 大纲跳转 / peeky:// 行定位会用 setSelectedRange 选中整行做定位反馈；
+        // 未聚焦时 AppKit 默认用非强调灰色高亮整行，深色模式下在标题行上格外
+        // 显眼，故关闭选中背景色，只保留滚动定位本身。
+        textView.selectedTextAttributes = [.backgroundColor: NSColor.clear]
         textView.textContainerInset = NSSize(width: 18, height: 16)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
@@ -653,6 +818,38 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// 树根 = RepoRoot.discover(from: target) ?? (target 为目录 ? target : 其父目录)。
+    /// 根已存在且 target 仍在根内 → 不重建，只 revealAndSelect；target 在根外 → 重算根并 reload。
+    private func establishTreeRoot(for target: URL) {
+        let standardizedTarget = target.standardizedFileURL
+        let targetIsDirectory = standardizedTarget.hasDirectoryPath
+
+        if let currentRoot = treeRootURL, isURL(standardizedTarget, containedIn: currentRoot) {
+            if !targetIsDirectory {
+                fileTreeView.revealAndSelect(fileURL: standardizedTarget)
+            }
+            return
+        }
+
+        let newRoot = RepoRoot.discover(from: standardizedTarget)
+            ?? (targetIsDirectory ? standardizedTarget : standardizedTarget.deletingLastPathComponent())
+
+        treeRootURL = newRoot
+        fileTreeSectionStack.isHidden = false
+        fileTreeView.reload(root: newRoot)
+
+        if !targetIsDirectory {
+            fileTreeView.revealAndSelect(fileURL: standardizedTarget)
+        }
+    }
+
+    private func isURL(_ url: URL, containedIn root: URL) -> Bool {
+        let rootComponents = root.standardizedFileURL.pathComponents
+        let urlComponents = url.standardizedFileURL.pathComponents
+        guard urlComponents.count >= rootComponents.count else { return false }
+        return Array(urlComponents.prefix(rootComponents.count)) == rootComponents
+    }
+
     private var activeTabIndex: Int? {
         guard let activeTabID else { return nil }
         return tabs.firstIndex { $0.id == activeTabID }
@@ -669,6 +866,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
             view.removeFromSuperview()
         }
 
+        tabSectionStack.isHidden = tabs.isEmpty
         updateSidebarVisibility()
 
         for tab in tabs {
@@ -716,10 +914,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func updateSidebarVisibility() {
-        let hasTabs = !tabs.isEmpty
-        sidebarView.isHidden = !hasTabs
-        sidebarScrollView.isHidden = !hasTabs
-        sidebarWidthConstraint?.constant = hasTabs ? 240 : 0
+        let hasContent = !tabs.isEmpty || treeRootURL != nil
+        sidebarView.isHidden = !hasContent
+        sidebarScrollView.isHidden = !hasContent
+        sidebarWidthConstraint?.constant = hasContent ? 240 : 0
         rootView.needsLayout = true
     }
 
@@ -1017,6 +1215,15 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
     @objc private func toggleWrap(_ sender: Any?) {
         wrapsLines.toggle()
         applyLineWrapping()
+    }
+
+    @objc private func toggleFileTreeCollapsed(_ sender: Any?) {
+        isFileTreeCollapsed.toggle()
+        fileTreeView.isHidden = isFileTreeCollapsed
+        fileTreeDisclosureButton.image = NSImage(
+            systemSymbolName: isFileTreeCollapsed ? "chevron.right" : "chevron.down",
+            accessibilityDescription: "Toggle file tree"
+        )
     }
 
     @objc private func copyPreview(_ sender: Any?) {

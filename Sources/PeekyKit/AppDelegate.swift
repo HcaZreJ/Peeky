@@ -105,12 +105,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func open(requests: [OpenRequest]) {
-        let fileRequests = requests.filter { !$0.url.hasDirectoryPath }
-        guard !fileRequests.isEmpty else { return }
+        // 目录请求同样路由到 targetWindowController：由窗口按其自身逻辑设置/切换树根
+        // （不产生内容 tab），不在此处过滤掉。
+        guard !requests.isEmpty else { return }
 
         let controller = targetWindowController()
         controller.showWindow(nil)
-        controller.open(requests: fileRequests)
+        controller.open(requests: requests)
 
         NSApp.activate(ignoringOtherApps: true)
     }

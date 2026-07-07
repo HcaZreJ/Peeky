@@ -18,7 +18,7 @@ fi
 OUTPUT="$(.build/debug/PeekyTests --filter "Hidden_${UNIT}" 2>&1 | sed -E $'s/\x1b\\[[0-9;]*m//g')"
 
 TOTAL="$(echo "$OUTPUT" | grep -Eo 'Test run with [0-9]+ tests?' | grep -Eo '[0-9]+' | tail -1)"
-PASSED="$(echo "$OUTPUT" | grep -Ec '^✔ Test ".*" passed after')"
+PASSED="$(echo "$OUTPUT" | grep -Ec '^✔ Test ".*" (with [0-9]+ test cases )?passed after')"
 
 if [[ -z "$TOTAL" ]]; then
   echo "PASSED: 0/0"

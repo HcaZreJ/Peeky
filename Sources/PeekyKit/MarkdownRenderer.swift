@@ -606,6 +606,65 @@ enum MarkdownRenderer {
         ]
     }
 
+    /// 把两个 NSColor 在指定外观下各自解析为具体 sRGB 分量后再混合，避免
+    /// `NSColor.blended(withFraction:of:)` 在无当前绘制外观上下文时按默认外观
+    /// （通常是浅色）一次性烘焙出固定色，导致深色模式下仍显示浅色底。
+    private static func resolvedColor(_ color: NSColor, for appearanceName: NSAppearance.Name) -> NSColor {
+        var resolved = color
+        NSAppearance(named: appearanceName)?.performAsCurrentDrawingAppearance {
+            resolved = color.usingColorSpace(.sRGB) ?? color
+        }
+        return resolved
+    }
+
+    private static func blendedColor(
+        _ base: NSColor,
+        with tint: NSColor,
+        fraction: CGFloat,
+        for appearanceName: NSAppearance.Name
+    ) -> NSColor {
+        let resolvedBase = resolvedColor(base, for: appearanceName)
+        let resolvedTint = resolvedColor(tint, for: appearanceName)
+        return resolvedBase.blended(withFraction: fraction, of: resolvedTint) ?? resolvedBase
+    }
+
+    /// 构造一个真正随外观切换重新取值的 NSColor：浅色/深色两个具体值在实际
+    /// 绘制时按当前外观选取，而不是在构造属性字符串那一刻就被写死。
+    private static func adaptiveColor(light: NSColor, dark: NSColor) -> NSColor {
+        NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+        }
+    }
+
+    private static func codeBlockBackgroundColor() -> NSColor {
+        adaptiveColor(
+            light: blendedColor(.textBackgroundColor, with: .systemBlue, fraction: 0.08, for: .aqua),
+            dark: blendedColor(.textBackgroundColor, with: .systemBlue, fraction: 0.08, for: .darkAqua)
+        )
+    }
+
+    private static func inlineCodeBackgroundColor() -> NSColor {
+        adaptiveColor(
+            light: blendedColor(.textBackgroundColor, with: .systemPink, fraction: 0.08, for: .aqua),
+            dark: blendedColor(.textBackgroundColor, with: .systemPink, fraction: 0.08, for: .darkAqua)
+        )
+    }
+
+    private static func inlineCodeForegroundColor() -> NSColor {
+        let darkPink = resolvedColor(.systemPink, for: .darkAqua)
+        return adaptiveColor(
+            light: resolvedColor(.systemPink, for: .aqua),
+            dark: darkPink.blended(withFraction: 0.25, of: .white) ?? darkPink
+        )
+    }
+
+    private static func tableHeaderBackgroundColor() -> NSColor {
+        adaptiveColor(
+            light: blendedColor(.controlBackgroundColor, with: .controlAccentColor, fraction: 0.18, for: .aqua),
+            dark: blendedColor(.controlBackgroundColor, with: .controlAccentColor, fraction: 0.18, for: .darkAqua)
+        )
+    }
+
     private static func codeBlockAttributes() -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineSpacing = 2
@@ -614,7 +673,7 @@ enum MarkdownRenderer {
         return [
             .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
             .foregroundColor: NSColor.labelColor,
-            .backgroundColor: NSColor.textBackgroundColor.blended(withFraction: 0.08, of: .systemBlue) ?? NSColor.textBackgroundColor,
+            .backgroundColor: codeBlockBackgroundColor(),
             .paragraphStyle: paragraph
         ]
     }
@@ -622,8 +681,8 @@ enum MarkdownRenderer {
     private static func inlineCodeAttributes(baseAttributes: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
         var attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-            .foregroundColor: NSColor.systemPink,
-            .backgroundColor: NSColor.textBackgroundColor.blended(withFraction: 0.08, of: .systemPink) ?? NSColor.textBackgroundColor
+            .foregroundColor: inlineCodeForegroundColor(),
+            .backgroundColor: inlineCodeBackgroundColor()
         ]
 
         if let paragraphStyle = baseAttributes[.paragraphStyle] {
@@ -679,7 +738,7 @@ enum MarkdownRenderer {
         block.setWidth(1, type: .absoluteValueType, for: .border)
         block.setBorderColor(NSColor.separatorColor.withAlphaComponent(0.45))
         block.backgroundColor = isHeader
-            ? NSColor.controlBackgroundColor.blended(withFraction: 0.18, of: .controlAccentColor)
+            ? tableHeaderBackgroundColor()
             : NSColor.textBackgroundColor
         return block
     }
