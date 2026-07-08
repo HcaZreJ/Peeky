@@ -1,32 +1,48 @@
 import AppKit
 import Foundation
 
-final class PreviewGutterView: NSRulerView {
+/// 行号/记录标记 gutter。与 scrollView 平级的独立 NSView（macOS 26 起
+/// NSRulerView 用 clipView.bounds 负偏移给 ruler 让位，与 NSTextView 的
+/// draw pipeline 冲突导致正文不绘制，独立 subview 绕开该机制）。
+/// 滚动与重排跟随靠监听 clipView bounds / textView frame 变化后整体重绘。
+final class PreviewGutterView: NSView {
     var configuration = PreviewGutterConfiguration.hidden {
         didSet {
-            ruleThickness = configuration.width
             needsDisplay = true
         }
     }
 
+    private weak var textView: NSTextView?
+
     override var isFlipped: Bool { true }
 
-    init() {
-        super.init(scrollView: nil, orientation: .verticalRuler)
-        clientView = nil
-        ruleThickness = configuration.width
-        reservedThicknessForMarkers = 0
-        reservedThicknessForAccessoryView = 0
+    func connect(textView: NSTextView, clipView: NSClipView) {
+        self.textView = textView
+
+        clipView.postsBoundsChangedNotifications = true
+        textView.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(textGeometryChanged(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: clipView
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(textGeometryChanged(_:)),
+            name: NSView.frameDidChangeNotification,
+            object: textView
+        )
     }
 
-    required init(coder: NSCoder) {
-        super.init(coder: coder)
+    @objc private func textGeometryChanged(_ notification: Notification) {
+        needsDisplay = true
     }
 
-    override func drawHashMarksAndLabels(in rect: NSRect) {
+    override func draw(_ dirtyRect: NSRect) {
         guard
             configuration.isVisible,
-            let textView = clientView as? NSTextView,
+            let textView,
             let layoutManager = textView.layoutManager,
             let textContainer = textView.textContainer
         else {
@@ -34,7 +50,7 @@ final class PreviewGutterView: NSRulerView {
         }
 
         NSColor.textBackgroundColor.setFill()
-        rect.fill()
+        dirtyRect.fill()
 
         let separatorX = bounds.maxX - 0.5
         NSColor.separatorColor.withAlphaComponent(0.55).setStroke()

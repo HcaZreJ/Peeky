@@ -292,6 +292,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
     private let openButton = NSButton()
     private let scrollView = DropScrollView()
     private let gutterView = PreviewGutterView()
+    private var gutterWidthConstraint: NSLayoutConstraint?
     private let textView = DropTextView()
     private let emptyView = NSStackView()
 
@@ -409,6 +410,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
 
         let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: 210)
         self.sidebarWidthConstraint = sidebarWidthConstraint
+        let gutterWidthConstraint = gutterView.widthAnchor.constraint(equalToConstant: 0)
+        self.gutterWidthConstraint = gutterWidthConstraint
 
         NSLayoutConstraint.activate([
             sidebarView.topAnchor.constraint(equalTo: rootView.topAnchor),
@@ -426,8 +429,13 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
             headerView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             headerView.heightAnchor.constraint(equalToConstant: 50),
 
+            gutterView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
+            gutterView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            gutterView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            gutterWidthConstraint,
+
             scrollView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: gutterView.trailingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
@@ -750,14 +758,14 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
-        scrollView.hasVerticalRuler = true
-        scrollView.rulersVisible = false
         scrollView.onDropFiles = { [weak self] urls in
             self?.onURLsDropped?(urls)
         }
         scrollView.onFileDragActiveChanged = { [weak self] active in
             self?.rootView.setDropHighlight(active)
         }
+        gutterView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(gutterView)
         contentView.addSubview(scrollView)
 
         textView.isEditable = false
@@ -786,8 +794,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         }
 
         scrollView.documentView = textView
-        gutterView.clientView = textView
-        scrollView.verticalRulerView = gutterView
+        gutterView.connect(textView: textView, clipView: scrollView.contentView)
     }
 
     private func setupEmptyView() {
@@ -1054,7 +1061,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
 
     private func applyDisplayMetadata(_ display: PreviewDisplayMetadata) {
         gutterView.configuration = display.gutter
-        scrollView.rulersVisible = display.gutter.isVisible
+        gutterWidthConstraint?.constant = display.gutter.width
         textView.overlayConfiguration = display.textOverlay
     }
 
