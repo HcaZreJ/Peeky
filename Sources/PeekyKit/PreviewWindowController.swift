@@ -794,7 +794,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         }
 
         scrollView.documentView = textView
-        gutterView.connect(textView: textView, clipView: scrollView.contentView)
+        gutterView.connect(textView: textView)
+        textView.onDidDraw = { [weak self] in
+            self?.gutterView.textViewDidDraw()
+        }
     }
 
     private func setupEmptyView() {
@@ -1083,6 +1086,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
                 let topRange = NSRange(location: 0, length: 0)
                 self.textView.setSelectedRange(topRange)
                 self.textView.scrollRangeToVisible(topRange)
+                self.gutterView.needsDisplay = true
             }
         }
     }
@@ -1095,6 +1099,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         let lineRange = text.lineRange(for: NSRange(location: location, length: 0))
         textView.setSelectedRange(lineRange)
         textView.scrollRangeToVisible(lineRange)
+        gutterView.needsDisplay = true
     }
 
     private func scrollToOutlineItem(_ item: MarkdownOutlineItem) {
@@ -1113,6 +1118,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         let lineRange = text.lineRange(for: NSRange(location: safeLocation, length: 0))
         textView.setSelectedRange(lineRange)
         textView.scrollRangeToVisible(lineRange)
+        gutterView.needsDisplay = true
     }
 
     private func characterOffset(forLine targetLine: Int, in text: NSString) -> Int {
@@ -1183,6 +1189,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
                 height: CGFloat.greatestFiniteMagnitude
             )
         }
+        gutterView.needsDisplay = true
     }
 
     private func configureIconButton(_ button: NSButton, symbol: String, tooltip: String, action: Selector) {

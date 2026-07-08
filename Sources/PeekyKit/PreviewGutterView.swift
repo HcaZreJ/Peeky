@@ -4,7 +4,14 @@ import Foundation
 /// 行号/记录标记 gutter。与 scrollView 平级的独立 NSView（macOS 26 起
 /// NSRulerView 用 clipView.bounds 负偏移给 ruler 让位，与 NSTextView 的
 /// draw pipeline 冲突导致正文不绘制，独立 subview 绕开该机制）。
-/// 滚动与重排跟随靠监听 clipView bounds / textView frame 变化后整体重绘。
+///
+/// clipsToBounds 必须为 true：macOS 14 起 NSView 默认不裁剪，draw 收到的
+/// dirtyRect 可远大于 bounds（窗口首帧是整窗），fill(dirtyRect) 会把背景色
+/// 涂到 header/sidebar 等兄弟视图上，表现为它们"空白"（issue #2）。
+///
+/// 滚动/重排跟随信号：DropTextView 每次 draw 后回调 textViewDidDraw()，
+/// gutter 对比可见区滚动偏移有变化才自我重绘（textView 滚动与重排必然
+/// 触发自身 draw，copy-on-scroll 也会绘制新露出的条带）。
 final class PreviewGutterView: NSView {
     var configuration = PreviewGutterConfiguration.hidden {
         didSet {
@@ -16,26 +23,21 @@ final class PreviewGutterView: NSView {
 
     override var isFlipped: Bool { true }
 
-    func connect(textView: NSTextView, clipView: NSClipView) {
-        self.textView = textView
-
-        clipView.postsBoundsChangedNotifications = true
-        textView.postsFrameChangedNotifications = true
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(textGeometryChanged(_:)),
-            name: NSView.boundsDidChangeNotification,
-            object: clipView
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(textGeometryChanged(_:)),
-            name: NSView.frameDidChangeNotification,
-            object: textView
-        )
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        clipsToBounds = true
     }
 
-    @objc private func textGeometryChanged(_ notification: Notification) {
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        clipsToBounds = true
+    }
+
+    func connect(textView: NSTextView) {
+        self.textView = textView
+    }
+
+    func textViewDidDraw() {
         needsDisplay = true
     }
 
@@ -59,8 +61,12 @@ final class PreviewGutterView: NSView {
             to: NSPoint(x: separatorX, y: bounds.maxY)
         )
 
+        // 用 withoutAdditionalLayout 变体：draw 过程绝不触发 TextKit 布局。
+        // 在窗口首次 display pass 中途强制布局会让 macOS 26 合成器丢掉同
+        // pass 里 header/sidebar 的绘制（issue #2）；首帧布局未就绪时先不画，
+        // textView 布局完成重绘后经 onDidDraw 信号补画。
         let visibleGlyphRange = layoutManager.glyphRange(
-            forBoundingRect: textView.visibleRect,
+            forBoundingRectWithoutAdditionalLayout: textView.visibleRect,
             in: textContainer
         )
         guard visibleGlyphRange.length > 0 else { return }

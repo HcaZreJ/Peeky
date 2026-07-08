@@ -6,8 +6,9 @@
 - `PreviewRenderer` 是"决策层"：选 Raw/Formatted 路径、执行性能预算降级、委派叶子模块——不碰视图几何。
 
 ## 视图约定
-- 一切内容渲染进单一 `NSTextView`（`DropTextView`）的 `NSAttributedString`；gutter（`PreviewGutterView`，与 scrollView 平级的独立 `NSView`，监听 clipView bounds / textView frame 变化重绘；macOS 26 起 `NSRulerView` 的 clipView.bounds 负偏移几何会让 `NSTextView` 正文不绘制，故 gutter 不走 ruler）与 overlay（记录分隔线/缩进参考线/注解）在 draw 时按**可见 glyph 范围**增量绘制，虚拟化交给 `NSLayoutManager`。
+- 一切内容渲染进单一 `NSTextView`（`DropTextView`）的 `NSAttributedString`；gutter（`PreviewGutterView`，与 scrollView 平级的独立 `NSView`，由 `DropTextView.onDidDraw` 回调驱动跟随重绘；macOS 26 起 `NSRulerView` 的 clipView.bounds 负偏移几何会让 `NSTextView` 正文不绘制，故 gutter 不走 ruler）与 overlay（记录分隔线/缩进参考线/注解）在 draw 时按**可见 glyph 范围**增量绘制，虚拟化交给 `NSLayoutManager`。
 - 行号查找用预计算 line-start 偏移 + 二分。
+- **自绘视图必须 `clipsToBounds = true`**：macOS 14 起 NSView 默认不裁剪，`draw(_:)` 收到的 dirtyRect 可远大于 bounds（窗口首帧为整窗），`fill(dirtyRect)` 会把背景涂到兄弟视图上（表现为兄弟"空白"，且 resize 救不回）。
 
 ## 性能预算（既有常量，新代码不得绕过）
 - `TextFileLoader.maxPreviewBytes = 80MB`（超出截断读取并标注）

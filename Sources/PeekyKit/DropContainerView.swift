@@ -261,6 +261,8 @@ final class DropScrollView: NSScrollView {
 final class DropTextView: NSTextView {
     var onDropFiles: (([URL]) -> Void)?
     var onFileDragActiveChanged: ((Bool) -> Void)?
+    /// 每次 draw 后回调（gutter 的滚动/重排跟随信号，见 PreviewGutterView）。
+    var onDidDraw: (() -> Void)?
     var overlayConfiguration = PreviewTextOverlayConfiguration.hidden {
         didSet {
             needsDisplay = true
@@ -327,6 +329,7 @@ final class DropTextView: NSTextView {
         drawRecordSeparators()
         drawIndentGuides()
         drawRecordAnnotations()
+        onDidDraw?()
     }
 
     override func viewDidChangeEffectiveAppearance() {
