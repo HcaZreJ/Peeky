@@ -9,6 +9,8 @@
 - 一切内容渲染进单一 `NSTextView`（`DropTextView`）的 `NSAttributedString`；gutter（`PreviewGutterView`，与 scrollView 平级的独立 `NSView`，由 `DropTextView.onDidDraw` 回调驱动跟随重绘；macOS 26 起 `NSRulerView` 的 clipView.bounds 负偏移几何会让 `NSTextView` 正文不绘制，故 gutter 不走 ruler）与 overlay（记录分隔线/缩进参考线/注解）在 draw 时按**可见 glyph 范围**增量绘制，虚拟化交给 `NSLayoutManager`。
 - 行号查找用预计算 line-start 偏移 + 二分。
 - **自绘视图必须 `clipsToBounds = true`**：macOS 14 起 NSView 默认不裁剪，`draw(_:)` 收到的 dirtyRect 可远大于 bounds（窗口首帧为整窗），`fill(dirtyRect)` 会把背景涂到兄弟视图上（表现为兄弟"空白"，且 resize 救不回）。
+- **textView 换行/不换行两分支都必须显式 `maxSize = greatestFiniteMagnitude`**：NSTextView 布局驱动的 frame 增长走 `setConstrainedFrameSize`，被钳在 maxSize 内，而默认 maxSize 是初始 frame（视口大小）——漏设时长文档 frame 长不过视口高度，scrollView 没有可滚动区域（`applyLineWrapping` 两分支均已设置）。
+- **文档布局由渲染管线主动推进**：macOS 26 上 TextKit1 惰性布局不自行推进；`PreviewWindowController.startLayoutPump()` 在每次内容/换行模式变化后主线程分片 `ensureLayout`（每拍 64k 字符、`main.async` 让出 runloop），frame 渐进长高、交互不阻塞。gutter/overlay 绘制保持零布局副作用（`withoutAdditionalLayout` 变体）只读已就绪数据；程序化跳转（`scrollToLine` 等）在 `scrollRangeToVisible` 前对目标 range 先 `ensureLayout`。
 
 ## 性能预算（既有常量，新代码不得绕过）
 - `TextFileLoader.maxPreviewBytes = 80MB`（超出截断读取并标注）

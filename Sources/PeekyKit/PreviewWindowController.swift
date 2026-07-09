@@ -299,6 +299,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
     private var tabs: [PreviewTab] = []
     private var activeTabID: UUID?
     private var wrapsLines = true
+    /// 递增即作废在途布局泵；每次内容或换行模式变化后 startLayoutPump() 重启。
+    private var layoutPumpGeneration = 0
     private var sidebarWidthConstraint: NSLayoutConstraint?
     private var isFileTreeCollapsed = false
     /// 当前文件树的根目录；nil 表示尚未打开过任何文件/目录，树区未建立。
@@ -1042,6 +1044,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         copyButton.isEnabled = true
         showPreviewState()
         applyLineWrapping()
+        startLayoutPump()
         let targetLocation = targetLine.flatMap { rendered.display.targetLocationsByOriginalLine[$0] }
         scheduleInitialScroll(targetLine: targetLine, targetLocation: targetLocation, tabID: tabID)
     }
@@ -1060,6 +1063,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         clearMarkdownOutline()
         showPreviewState()
         applyLineWrapping()
+        startLayoutPump()
     }
 
     private func applyDisplayMetadata(_ display: PreviewDisplayMetadata) {
@@ -1097,6 +1101,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
 
         let location = characterOffset(forLine: line, in: text)
         let lineRange = text.lineRange(for: NSRange(location: location, length: 0))
+        textView.layoutManager?.ensureLayout(forCharacterRange: lineRange)
         textView.setSelectedRange(lineRange)
         textView.scrollRangeToVisible(lineRange)
         gutterView.needsDisplay = true
@@ -1116,6 +1121,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
 
         let safeLocation = min(max(location, 0), text.length)
         let lineRange = text.lineRange(for: NSRange(location: safeLocation, length: 0))
+        textView.layoutManager?.ensureLayout(forCharacterRange: lineRange)
         textView.setSelectedRange(lineRange)
         textView.scrollRangeToVisible(lineRange)
         gutterView.needsDisplay = true
@@ -1170,6 +1176,14 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
             scrollView.hasHorizontalScroller = false
             textView.isHorizontallyResizable = false
             textView.autoresizingMask = [.width]
+            // maxSize 必须无限大：NSTextView 布局驱动的增长走
+            // setConstrainedFrameSize，被钳在 maxSize 内；默认 maxSize 是
+            // 初始 frame（视口大小），长文档 frame 长不过视口高度，
+            // scrollView 便没有可滚动区域（issue #3）。
+            textView.maxSize = NSSize(
+                width: CGFloat.greatestFiniteMagnitude,
+                height: CGFloat.greatestFiniteMagnitude
+            )
             textView.textContainer?.widthTracksTextView = true
             textView.textContainer?.containerSize = NSSize(
                 width: scrollView.contentSize.width,
@@ -1190,6 +1204,38 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
             )
         }
         gutterView.needsDisplay = true
+    }
+
+    /// 主线程分片推进 TextKit1 布局。macOS 26 上惰性布局不自行推进，
+    /// 无人推进时长文档的 textView frame 停在视口高度，scrollView 没有
+    /// 可滚动区域（issue #3）。每拍布局一小段后经 main.async 让出 runloop，
+    /// 文档 frame 随之渐进长高，滚动条渐进变准，交互始终响应。
+    private func startLayoutPump() {
+        layoutPumpGeneration += 1
+        pumpLayout(generation: layoutPumpGeneration)
+    }
+
+    private func pumpLayout(generation: Int) {
+        guard
+            generation == layoutPumpGeneration,
+            let layoutManager = textView.layoutManager,
+            let textStorage = textView.textStorage
+        else {
+            return
+        }
+
+        let length = textStorage.length
+        let firstUnlaid = layoutManager.firstUnlaidCharacterIndex()
+        guard firstUnlaid < length else {
+            gutterView.needsDisplay = true
+            return
+        }
+
+        let chunkLength = min(64_000, length - firstUnlaid)
+        layoutManager.ensureLayout(forCharacterRange: NSRange(location: firstUnlaid, length: chunkLength))
+        DispatchQueue.main.async { [weak self] in
+            self?.pumpLayout(generation: generation)
+        }
     }
 
     private func configureIconButton(_ button: NSButton, symbol: String, tooltip: String, action: Selector) {
@@ -1229,6 +1275,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
     @objc private func toggleWrap(_ sender: Any?) {
         wrapsLines.toggle()
         applyLineWrapping()
+        startLayoutPump()
     }
 
     @objc private func toggleFileTreeCollapsed(_ sender: Any?) {

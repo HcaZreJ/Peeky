@@ -61,10 +61,11 @@ final class PreviewGutterView: NSView {
             to: NSPoint(x: separatorX, y: bounds.maxY)
         )
 
-        // 用 withoutAdditionalLayout 变体：draw 过程绝不触发 TextKit 布局。
-        // 在窗口首次 display pass 中途强制布局会让 macOS 26 合成器丢掉同
-        // pass 里 header/sidebar 的绘制（issue #2）；首帧布局未就绪时先不画，
-        // textView 布局完成重绘后经 onDidDraw 信号补画。
+        // 用 withoutAdditionalLayout 变体：gutter 绘制零布局副作用。文档
+        // 布局由 PreviewWindowController 的分片布局泵主动推进（macOS 26 上
+        // TextKit1 惰性布局不自行推进，无人推进时长文档 frame 停在视口
+        // 高度、scrollView 无可滚动区域，issue #3）；可见区在 textView
+        // 自绘时已由 AppKit 布局完成，此处只读已就绪的数据。
         let visibleGlyphRange = layoutManager.glyphRange(
             forBoundingRectWithoutAdditionalLayout: textView.visibleRect,
             in: textContainer
