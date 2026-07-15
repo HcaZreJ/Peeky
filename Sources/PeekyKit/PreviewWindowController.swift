@@ -12,6 +12,8 @@ private struct PreviewTab {
     var targetColumn: Int?
     /// 后台构建好的 JSON/JSONL 树索引缓存；tab 重新激活时直接复用，不重新构建。
     var jsonTreeIndex: JSONTreeIndex?
+    /// JSON/JSONL tab 的树/原文视图选择；per-tab 记录，切 tab 保持各自状态。
+    var jsonTreeVisible: Bool
 
     init(url: URL, document: LoadedText?, errorMessage: String?) {
         self.id = UUID()
@@ -22,6 +24,7 @@ private struct PreviewTab {
         self.collapseNestedJSON = false
         self.targetLine = nil
         self.targetColumn = nil
+        self.jsonTreeVisible = true
     }
 }
 
@@ -293,6 +296,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let titleLabel = NSTextField(labelWithString: "Peeky")
     private let metaLabel = NSTextField(labelWithString: "")
     private let modeControl = NSSegmentedControl(labels: ["Format", "Raw"], trackingMode: .selectOne, target: nil, action: nil)
+    private let jsonViewToggle = NSSegmentedControl(labels: ["Tree", "Text"], trackingMode: .selectOne, target: nil, action: nil)
     private let foldButton = NSButton()
     private let wrapButton = NSButton()
     private let copyButton = NSButton()
@@ -311,6 +315,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var wrapsLines = true
     /// 递增即作废在途布局泵；每次内容或换行模式变化后 startLayoutPump() 重启。
     private var layoutPumpGeneration = 0
+    /// 递增即作废在途高亮分块流；tab 切换/关闭/重新渲染时 invalidateHighlighting() 推进，
+    /// 在途 Task 据此丢弃迟到的 chunk，杜绝旧文档颜色刷到新文档上。
+    private var highlightGeneration = 0
+    private var highlightTask: Task<Void, Never>?
     private var sidebarWidthConstraint: NSLayoutConstraint?
     private var isFileTreeCollapsed = false
     /// 当前文件树的根目录；nil 表示尚未打开过任何文件/目录，树区未建立。
@@ -397,6 +405,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     func windowWillClose(_ notification: Notification) {
         onClose?()
+    }
+
+    /// 窗口 resize（含拖拽 live resize 逐帧）实时重算限宽阅读列内边距（R4f）；
+    /// 非 markdown formatted 状态下该调用是零成本的 no-op（复位到默认全宽内边距）。
+    func windowDidResize(_ notification: Notification) {
+        applyMarkdownReadingColumn(isActive: isMarkdownReadingColumnActive)
     }
 
     private func setupUI() {
@@ -733,6 +747,13 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         modeControl.selectedSegment = PreviewMode.formatted.rawValue
         modeControl.segmentStyle = .texturedRounded
 
+        jsonViewToggle.target = self
+        jsonViewToggle.action = #selector(jsonViewModeChanged(_:))
+        jsonViewToggle.selectedSegment = 0
+        jsonViewToggle.segmentStyle = .texturedRounded
+        jsonViewToggle.isHidden = true
+        jsonViewToggle.toolTip = "Switch between tree and raw text view"
+
         configureIconButton(
             foldButton,
             symbol: "arrow.down.right.and.arrow.up.left",
@@ -746,7 +767,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         configureIconButton(openButton, symbol: "folder", tooltip: "Open", action: #selector(openClicked(_:)))
         configureCopyMenu()
 
-        let controls = NSStackView(views: [modeControl, foldButton, wrapButton, copyButton, revealButton, openButton])
+        let controls = NSStackView(views: [modeControl, jsonViewToggle, foldButton, wrapButton, copyButton, revealButton, openButton])
         controls.orientation = .horizontal
         controls.alignment = .centerY
         controls.spacing = 8
@@ -991,6 +1012,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func renderActiveTab() {
+        invalidateHighlighting()
+
         guard let tab = activeTab else {
             showEmptyState()
             return
@@ -1005,6 +1028,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
                 document: document,
                 mode: tab.mode,
                 collapseNestedJSON: tab.collapseNestedJSON,
+                jsonTreeVisible: tab.jsonTreeVisible,
                 targetLine: tab.targetLine,
                 tabID: tab.id
             )
@@ -1019,6 +1043,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         document: LoadedText,
         mode: PreviewMode,
         collapseNestedJSON: Bool,
+        jsonTreeVisible: Bool,
         targetLine: Int?,
         tabID: UUID
     ) {
@@ -1040,6 +1065,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         )
         textView.textStorage?.setAttributedString(rendered.attributedText)
         applyDisplayMetadata(rendered.display)
+        applyEditorTheme(usesDarkModern: rendered.usesDarkModernTheme)
+        if let language = rendered.highlightLanguage {
+            startHighlighting(text: document.text, language: language, tabID: tabID)
+        }
         if document.kind == .markdown {
             rebuildMarkdownOutline(rendered.outline)
         } else {
@@ -1068,13 +1097,22 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         copyButton.isEnabled = true
         showPreviewState()
         applyLineWrapping()
+        applyMarkdownReadingColumn(isActive: isMarkdownReadingColumnActive)
         startLayoutPump()
         let targetLocation = targetLine.flatMap { rendered.display.targetLocationsByOriginalLine[$0] }
         scheduleInitialScroll(targetLine: targetLine, targetLocation: targetLocation, tabID: tabID)
 
         if document.kind == .json || document.kind == .jsonl {
-            presentJSONTree(document: document, tabID: tabID)
+            jsonViewToggle.isHidden = false
+            jsonViewToggle.isEnabled = true
+            jsonViewToggle.selectedSegment = jsonTreeVisible ? 0 : 1
+            if jsonTreeVisible {
+                presentJSONTree(document: document, tabID: tabID)
+            } else {
+                showPlainText()
+            }
         } else {
+            jsonViewToggle.isHidden = true
             showPlainText()
         }
     }
@@ -1083,6 +1121,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         titleLabel.stringValue = url.lastPathComponent
         metaLabel.stringValue = "Open failed"
         modeControl.isEnabled = false
+        jsonViewToggle.isHidden = true
         foldButton.isEnabled = false
         foldButton.state = .off
         revealButton.isEnabled = true
@@ -1090,14 +1129,35 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         textView.textStorage?.setAttributedString(SyntaxHighlighter.monospace(message))
         applyDisplayMetadata(.plain)
+        applyEditorTheme(usesDarkModern: false)
         clearMarkdownOutline()
         showPreviewState()
         showPlainText()
         applyLineWrapping()
+        applyMarkdownReadingColumn(isActive: isMarkdownReadingColumnActive)
         startLayoutPump()
     }
 
-    // MARK: - JSON 树 / 原文切换（接线点；R4d 加交互层与显式切换按钮）
+    // MARK: - JSON 树 / 原文切换
+
+    /// JSON 树当前是否为可见视图（json/jsonl tab 且未切到原文）；供主菜单折叠命令族
+    /// （全部展开/全部折叠/折叠到第 N 层）的可用性判定。
+    var isJSONTreeActive: Bool {
+        guard let tab = activeTab, let document = tab.document else { return false }
+        return (document.kind == .json || document.kind == .jsonl) && tab.jsonTreeVisible
+    }
+
+    func expandJSONTreeAll() {
+        jsonOutlineView.expandAll()
+    }
+
+    func collapseJSONTreeAll() {
+        jsonOutlineView.collapseAll()
+    }
+
+    func collapseJSONTree(toLevel level: Int) {
+        jsonOutlineView.collapseToLevel(level)
+    }
 
     /// JSON/JSONL 默认视图 = 树：索引已缓存（tab 曾激活过）直接无闪切换；否则先保持
     /// 原文文本视图可见，后台构建索引，就绪且该 tab 仍激活时才切到树，避免闪切换/
@@ -1142,6 +1202,124 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func applyDisplayMetadata(_ display: PreviewDisplayMetadata) {
         gutterView.configuration = display.gutter
         textView.overlayConfiguration = display.textOverlay
+    }
+
+    // MARK: - 限宽阅读列（R4f）：markdown formatted 模式正文列定宽居中
+
+    /// 当前是否应处于限宽阅读列状态：markdown + formatted + 开启折行。关闭折行时
+    /// textView 走水平滚动（isHorizontallyResizable=true / widthTracksTextView=false），
+    /// 折行意义上的"列宽"不成立，故此时与非 markdown 一样退回默认全宽。
+    private var isMarkdownReadingColumnActive: Bool {
+        guard wrapsLines, let tab = activeTab, let document = tab.document else { return false }
+        return document.kind == .markdown && tab.mode == .formatted
+    }
+
+    /// 实现取舍：textView 保持既有 widthTracksTextView=true 全宽栈不变（折行/选中/
+    /// 复制/gutter 行号换算全部沿用现有管线，零改动），只动态调
+    /// textContainerInset.width 做左右对称内边距——AppKit 在 widthTracksTextView=true
+    /// 时按 (textView.frame.width − 2×textContainerInset.width) 换算实际排版宽度，
+    /// 折行天然按此列宽发生；字符定位（scrollToLine/scrollToOutlineItem 等）全程只用
+    /// NSRange 字符偏移，不含任何 x 坐标假设，故不受水平内边距变化影响。
+    /// 列宽 = min(42×16pt 正文字号≈672pt, 可用宽−2×24pt 最小边距)，居中；
+    /// 非 markdown / raw / 关闭折行时复位到既有默认 18pt 内边距（现状全宽行为）。
+    private func applyMarkdownReadingColumn(isActive: Bool) {
+        guard isActive else {
+            textView.textContainerInset = NSSize(width: 18, height: 16)
+            return
+        }
+
+        let columnMaxWidth: CGFloat = 42 * 16
+        let minMargin: CGFloat = 24
+        let availableWidth = scrollView.contentSize.width
+
+        let margin = availableWidth > columnMaxWidth
+            ? (availableWidth - columnMaxWidth) / 2
+            : min(minMargin, max(0, availableWidth / 2))
+
+        textView.textContainerInset = NSSize(width: margin, height: 16)
+    }
+
+    // MARK: - 高亮接入（R4e）：Dark Modern 主题 + 分块原位上色
+
+    /// 编辑器区（scrollView + textView + gutterView）整体切 Dark Modern 外观：显式覆盖
+    /// appearance 让 indent guides/record 注解等既有动态系统色（DropTextView 内绘制）
+    /// 也随之解析为深色变体；背景/gutter 精确色值另见 DarkModernTheme。
+    private func applyEditorTheme(usesDarkModern: Bool) {
+        let appearance = usesDarkModern ? NSAppearance(named: .darkAqua) : nil
+        scrollView.appearance = appearance
+        textView.appearance = appearance
+        gutterView.appearance = appearance
+        textView.backgroundColor = usesDarkModern ? DarkModernTheme.background : .textBackgroundColor
+        gutterView.usesDarkModernTheme = usesDarkModern
+    }
+
+    /// 递增高亮代际并取消在途分块流；tab 切换/关闭/重新渲染前必调，防止旧文档的
+    /// 迟到 chunk 刷到新内容上。
+    private func invalidateHighlighting() {
+        highlightTask?.cancel()
+        highlightTask = nil
+        highlightGeneration += 1
+    }
+
+    /// 起后台分块高亮流：首块（200 行）优先泵送，逐块到达即在主线程原位 addAttribute
+    /// 上色，绝不整文重设 attributedString。代际 + 当前活跃 tab 双重校验，过期结果丢弃。
+    private func startHighlighting(text: String, language: String, tabID: UUID) {
+        guard let stream = HighlightService.shared.highlightStream(text: text, language: language) else {
+            return
+        }
+
+        let generation = highlightGeneration
+        let lineStarts = PreviewDisplayMetadata.lineStartLocations(in: text)
+
+        highlightTask = Task { @MainActor [weak self] in
+            for await chunk in stream {
+                guard let self, !Task.isCancelled else { return }
+                guard self.highlightGeneration == generation, self.activeTabID == tabID else { return }
+                self.applyHighlightChunk(chunk, lineStarts: lineStarts)
+            }
+        }
+    }
+
+    private func applyHighlightChunk(_ chunk: HighlightChunk, lineStarts: [Int]) {
+        guard let textStorage = textView.textStorage else { return }
+        let totalLength = textStorage.length
+
+        textStorage.beginEditing()
+        for (offset, line) in chunk.lines.enumerated() {
+            let lineIndex = chunk.firstLine + offset
+            guard lineIndex < lineStarts.count else { continue }
+
+            var location = lineStarts[lineIndex]
+            for token in line {
+                let length = (token.text as NSString).length
+                guard length > 0 else { continue }
+                guard location + length <= totalLength else { break }
+                textStorage.addAttribute(
+                    .foregroundColor,
+                    value: highlightColor(fromHex: token.colorHex),
+                    range: NSRange(location: location, length: length)
+                )
+                location += length
+            }
+        }
+        textStorage.endEditing()
+    }
+
+    private func highlightColor(fromHex hex: String) -> NSColor {
+        var sanitized = hex
+        if sanitized.hasPrefix("#") {
+            sanitized.removeFirst()
+        }
+        guard sanitized.count == 6, let value = UInt32(sanitized, radix: 16) else {
+            return DarkModernTheme.foreground
+        }
+
+        return NSColor(
+            srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
     }
 
     private func clearTargetPosition(for tabID: UUID) {
@@ -1229,6 +1407,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         jsonOutlineView.isHidden = true
         jsonOutlineView.reset()
         modeControl.isEnabled = false
+        jsonViewToggle.isHidden = true
         foldButton.isEnabled = false
         foldButton.state = .off
         revealButton.isEnabled = false
@@ -1236,6 +1415,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         metaLabel.stringValue = ""
         textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
         applyDisplayMetadata(.plain)
+        applyEditorTheme(usesDarkModern: false)
+        applyMarkdownReadingColumn(isActive: isMarkdownReadingColumnActive)
         clearMarkdownOutline()
     }
 
@@ -1345,9 +1526,16 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         renderActiveTab()
     }
 
+    @objc private func jsonViewModeChanged(_ sender: NSSegmentedControl) {
+        guard let index = activeTabIndex else { return }
+        tabs[index].jsonTreeVisible = sender.selectedSegment == 0
+        renderActiveTab()
+    }
+
     @objc private func toggleWrap(_ sender: Any?) {
         wrapsLines.toggle()
         applyLineWrapping()
+        applyMarkdownReadingColumn(isActive: isMarkdownReadingColumnActive)
         startLayoutPump()
     }
 

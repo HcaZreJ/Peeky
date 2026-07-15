@@ -30,6 +30,14 @@ final class PreviewGutterView: NSRulerView {
         }
     }
 
+    /// 编辑器区当前是否统一为 Dark Modern 配色（源码高亮 / JSON 原文模式）；
+    /// 由 PreviewWindowController 随每次渲染同步，仅影响本视图填色取值来源。
+    var usesDarkModernTheme = false {
+        didSet {
+            needsDisplay = true
+        }
+    }
+
     private weak var textView: NSTextView?
     private weak var hostScrollView: NSScrollView?
     // deinit 在 Swift 6 严格并发下总是 nonisolated，无法访问主 actor 隔离的存储属性；
@@ -129,11 +137,11 @@ final class PreviewGutterView: NSRulerView {
             return
         }
 
-        NSColor.textBackgroundColor.setFill()
+        (usesDarkModernTheme ? DarkModernTheme.background : NSColor.textBackgroundColor).setFill()
         rect.fill()
 
         let separatorX = bounds.maxX - 0.5
-        NSColor.separatorColor.withAlphaComponent(0.55).setStroke()
+        (usesDarkModernTheme ? DarkModernTheme.gutterSeparator : NSColor.separatorColor.withAlphaComponent(0.55)).setStroke()
         NSBezierPath.strokeLine(
             from: NSPoint(x: separatorX, y: bounds.minY),
             to: NSPoint(x: separatorX, y: bounds.maxY)
@@ -204,7 +212,9 @@ final class PreviewGutterView: NSRulerView {
         let prefix = isWarning ? "! " : ""
         let displayLabel = prefix + label
         let font = NSFont.monospacedSystemFont(ofSize: 11, weight: isWarning ? .semibold : .regular)
-        let color = isWarning ? NSColor.systemRed : NSColor.tertiaryLabelColor
+        let color = isWarning
+            ? NSColor.systemRed
+            : (usesDarkModernTheme ? DarkModernTheme.gutterLineNumber : NSColor.tertiaryLabelColor)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: color

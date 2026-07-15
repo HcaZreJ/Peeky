@@ -6,23 +6,40 @@ enum PreviewMode: Int {
     case raw = 1
 }
 
+/// 源码类文件 / JSON 原文模式命中 `HighlightService` 高亮范围时，编辑器区固定使用的
+/// VSCode Dark Modern 配色；未命中范围的类型（markdown/xml/csv/log/纯文本/jsonl）
+/// 保持既有动态外观不变。
+enum DarkModernTheme {
+    static let background = NSColor(srgbRed: 0x1F / 255, green: 0x1F / 255, blue: 0x1F / 255, alpha: 1)
+    static let foreground = NSColor(srgbRed: 0xCC / 255, green: 0xCC / 255, blue: 0xCC / 255, alpha: 1)
+    static let gutterLineNumber = NSColor(srgbRed: 0x6E / 255, green: 0x76 / 255, blue: 0x81 / 255, alpha: 1)
+    static let gutterSeparator = gutterLineNumber.withAlphaComponent(0.35)
+}
+
 struct RenderedPreview {
     let attributedText: NSAttributedString
     let note: String?
     let outline: [MarkdownOutlineItem]
     let display: PreviewDisplayMetadata
+    /// 非 nil = 命中 HighlightService 高亮接入范围（shiki language id）；PreviewWindowController
+    /// 据此起 highlightStream 分块上色，并统一编辑器区为 Dark Modern 配色。
+    let highlightLanguage: String?
 
     init(
         attributedText: NSAttributedString,
         note: String?,
         outline: [MarkdownOutlineItem] = [],
-        display: PreviewDisplayMetadata = .plain
+        display: PreviewDisplayMetadata = .plain,
+        highlightLanguage: String? = nil
     ) {
         self.attributedText = attributedText
         self.note = note
         self.outline = outline
         self.display = display
+        self.highlightLanguage = highlightLanguage
     }
+
+    var usesDarkModernTheme: Bool { highlightLanguage != nil }
 }
 
 enum PreviewRenderer {
@@ -39,7 +56,8 @@ enum PreviewRenderer {
                 return RenderedPreview(
                     attributedText: raw.attributedText,
                     note: raw.note,
-                    outline: MarkdownRenderer.outline(in: document.text)
+                    outline: MarkdownRenderer.outline(in: document.text),
+                    highlightLanguage: raw.highlightLanguage
                 )
             }
             return raw
@@ -51,7 +69,8 @@ enum PreviewRenderer {
             return RenderedPreview(
                 attributedText: raw.attributedText,
                 note: "Raw preview for large file",
-                outline: outline
+                outline: outline,
+                highlightLanguage: raw.highlightLanguage
             )
         }
 
@@ -133,18 +152,50 @@ enum PreviewRenderer {
     }
 
     private static func renderRaw(_ document: LoadedText) -> RenderedPreview {
+        let extensionLanguage = HighlightService.language(forExtension: document.url.pathExtension)
+
         switch document.kind {
         case .json, .jsonl:
+            // 仅 JSON 的原文模式命中高亮接入范围；JSONL 原文保留既有记录标记/坏行管线，不接。
+            let language = document.kind == .json ? extensionLanguage : nil
             return RenderedPreview(
-                attributedText: SyntaxHighlighter.highlightJSON(document.text),
+                attributedText: rawAttributedText(document.text, language: language) {
+                    SyntaxHighlighter.highlightJSON(document.text)
+                },
                 note: "Raw",
-                display: .lineNumbers(for: document.text, showsIndentGuides: document.kind == .json)
+                display: .lineNumbers(for: document.text, showsIndentGuides: document.kind == .json),
+                highlightLanguage: language
             )
         case .xml, .plist:
             return RenderedPreview(attributedText: SyntaxHighlighter.highlightXML(document.text), note: "Raw")
         default:
-            return RenderedPreview(attributedText: SyntaxHighlighter.monospace(document.text), note: "Raw")
+            return RenderedPreview(
+                attributedText: rawAttributedText(document.text, language: extensionLanguage) {
+                    SyntaxHighlighter.monospace(document.text)
+                },
+                note: "Raw",
+                highlightLanguage: extensionLanguage
+            )
         }
+    }
+
+    /// 命中高亮接入范围（language 非 nil）时先铺 Dark Modern 基色纯文本——token 分块到达后由
+    /// PreviewWindowController 原位 addAttribute 覆盖前景色，绝不整文重设 attributedString；
+    /// 未命中范围时走既有 fallback（现状高亮/monospace）。
+    private static func rawAttributedText(
+        _ text: String,
+        language: String?,
+        fallback: () -> NSAttributedString
+    ) -> NSAttributedString {
+        guard language != nil else { return fallback() }
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 2
+        return NSAttributedString(string: text, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
+            .foregroundColor: DarkModernTheme.foreground,
+            .paragraphStyle: paragraph
+        ])
     }
 
     private static func applyInvalidLineHighlighting(
