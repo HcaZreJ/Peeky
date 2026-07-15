@@ -26,6 +26,7 @@
 ## 手动验收清单（转型期）
 - **任何 UI/渲染改动须在浅色与深色两种外观下各过一遍**（系统外观切换或 `defaults write -g AppleInterfaceStyle`）；颜色类改动另需两外观 resolve 亮度断言（背景/前景对比方向正确）
 - `swift run Peeky <md>` → 弹出即读，Markdown 大纲侧栏可点
+- 多标题 Markdown（≥40 个标题）→ 窗口高度不超出屏幕、上下可自由 resize，CONTENTS 大纲区在 35% 上限内自行滚动
 - `<json>` / `<jsonl>` → 格式化 + 折叠 toggle + 坏行红标
 - `.app` bundle 后 `open "peeky://open?path=...&line=N"` → 打开并定位到行
 - 大文件（>8MB）→ 降级 raw 不卡死
