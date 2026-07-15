@@ -18,6 +18,25 @@ struct HighlightChunk: Equatable {
     var lines: [HighlightedLine]
 }
 
+/// `highlightStream` 的取消标志：`continuation.onTermination`（任意线程）与
+/// producer 循环（共享串行队列）分别写 / 读，用锁保证跨线程可见性。
+private final class StreamCancellationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+}
+
 /// JSC+Shiki 高亮服务：JSContext 单例 + 后台串行队列。
 /// 引擎故障/超预算/未知语言一律返回 nil（调用方纯文本回退），不抛错不崩溃。
 final class HighlightService: @unchecked Sendable {
@@ -60,11 +79,22 @@ final class HighlightService: @unchecked Sendable {
 
     /// 分块高亮流：按文档顺序产出（首块小而快，利于首屏上色），
     /// 直至覆盖全文后结束。nil 语义同 highlight。
+    ///
+    /// 消费方 Task 取消（或流被提前丢弃）时，通过 `continuation.onTermination`
+    /// 置位一个线程安全的取消标志；producer 在共享串行队列上每个 chunk 开始前
+    /// 检查该标志，一旦置位立即 return，不再进 JS 引擎 tokenize 剩余内容，
+    /// 避免为已放弃的文档白白跑满全文并阻塞队列上后续请求。
     func highlightStream(text: String, language: String) -> AsyncStream<HighlightChunk>? {
         guard text.utf16.count <= Self.maxUTF16Length else { return nil }
         guard Self.supportedLanguages.contains(language) else { return nil }
 
+        let cancellationFlag = StreamCancellationFlag()
+
         return AsyncStream { continuation in
+            continuation.onTermination = { _ in
+                cancellationFlag.cancel()
+            }
+
             queue.async { [self] in
                 guard ensureContextReady() else {
                     continuation.finish()
@@ -78,6 +108,8 @@ final class HighlightService: @unchecked Sendable {
                 var isFirstChunk = true
 
                 while startIndex < sourceLines.count {
+                    guard !cancellationFlag.isCancelled else { return }
+
                     let chunkLineCount = isFirstChunk
                         ? Self.firstStreamChunkLineCount
                         : Self.subsequentStreamChunkLineCount
@@ -181,11 +213,28 @@ final class HighlightService: @unchecked Sendable {
         return true
     }
 
+    /// `Bundle.module` fatalError 时找不到资源，与本服务"永不崩溃只降级"的
+    /// 契约冲突，因此手写多候选寻径：标准 .app 布局（Contents/Resources）
+    /// 与裸可执行文件布局（swift build / PeekyTests：bundle 与二进制同级）
+    /// 依次尝试，全部落空则返回 nil，交由调用方走既有降级路径。
     private func loadBundleSource() -> String? {
-        guard let url = Bundle.module.url(forResource: "shiki-bundle", withExtension: "js") else {
-            return nil
+        let bundleName = "Peeky_PeekyKit.bundle"
+        var candidateURLs: [URL] = []
+
+        if let resourceURL = Bundle.main.resourceURL {
+            candidateURLs.append(resourceURL.appendingPathComponent(bundleName))
         }
-        return try? String(contentsOf: url, encoding: .utf8)
+        candidateURLs.append(Bundle.main.bundleURL.appendingPathComponent(bundleName))
+
+        for candidateURL in candidateURLs {
+            guard let resourceBundle = Bundle(url: candidateURL) else { continue }
+            guard let scriptURL = resourceBundle.url(forResource: "shiki-bundle", withExtension: "js") else { continue }
+            if let source = try? String(contentsOf: scriptURL, encoding: .utf8) {
+                return source
+            }
+        }
+
+        return nil
     }
 
     private func runInit(on context: JSContext) -> Bool {

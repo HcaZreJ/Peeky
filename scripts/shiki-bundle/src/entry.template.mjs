@@ -150,10 +150,15 @@ function peekyTokenize(text, lang) {
 
 function peekyTokenizeChunk(text, lang, stateId) {
   return getHighlighter().then((highlighter) => {
-    const prevState =
-      stateId === null || stateId === undefined
-        ? undefined
-        : grammarStates.get(stateId)
+    let prevState
+    if (stateId !== null && stateId !== undefined) {
+      prevState = grammarStates.get(stateId)
+      // Continuation is a linear chain (each chunk's stateId is consumed at
+      // most once to produce the next chunk's state): drop the old handle
+      // immediately so a long streaming session doesn't accumulate an
+      // unbounded number of retained grammar states on the JS heap.
+      grammarStates.delete(stateId)
+    }
     const tokens = tokenizeWith(highlighter, text, lang, prevState)
     const nextState = highlighter.getLastGrammarState(tokens)
     const id = nextStateId++

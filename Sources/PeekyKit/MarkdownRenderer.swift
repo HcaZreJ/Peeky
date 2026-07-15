@@ -161,18 +161,27 @@ enum MarkdownRenderer {
         paragraph.paragraphSpacingBefore = 24
         paragraph.paragraphSpacing = 16
 
-        var attributes: [NSAttributedString.Key: Any] = [
+        if level <= 2 {
+            paragraph.textBlocks = [headingDividerBlock()]
+        }
+
+        return [
             .font: boldFont(size: headingFontSize(level: level)),
             .foregroundColor: NSColor.labelColor,
             .paragraphStyle: paragraph
         ]
+    }
 
-        if level <= 2 {
-            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-            attributes[.underlineColor] = NSColor.separatorColor
-        }
-
-        return attributes
+    /// h1/h2 GitHub 观感的全宽底边线：挂在段落的 `NSTextBlock` 底（`.minY`）
+    /// border 上，而不是文字级 underline——文字级 underline 只沿标题字符本身的
+    /// glyph 宽度绘制，短标题下线会明显短于内容列宽；`NSTextBlock` 未绑定
+    /// `NSTextTable` 时按整个可用文本宽度布局，边框天然铺满内容列。
+    private static func headingDividerBlock() -> NSTextBlock {
+        let block = NSTextBlock()
+        block.setWidth(1, type: .absoluteValueType, for: .border, edge: .minY)
+        block.setBorderColor(NSColor.separatorColor, for: .minY)
+        block.setWidth(10, type: .absoluteValueType, for: .padding, edge: .minY)
+        return block
     }
 
     fileprivate static func quoteAttributes(depth: Int) -> [NSAttributedString.Key: Any] {
@@ -183,12 +192,24 @@ enum MarkdownRenderer {
         paragraph.paragraphSpacing = 16
         paragraph.headIndent = indent
         paragraph.firstLineHeadIndent = indent
+        paragraph.textBlocks = [quoteBarBlock()]
 
         return [
             .font: bodyFont(),
             .foregroundColor: NSColor.secondaryLabelColor,
             .paragraphStyle: paragraph
         ]
+    }
+
+    /// 引用块左侧色条：挂在段落的 `NSTextBlock` 左（`.minX`）border 上，色用
+    /// 次级色系（`secondaryLabelColor` 半透明），与引用文字既有的
+    /// `secondaryLabelColor` 前景色/`headIndent` 缩进语义并存，互不覆盖。
+    private static func quoteBarBlock() -> NSTextBlock {
+        let block = NSTextBlock()
+        block.setWidth(3.5, type: .absoluteValueType, for: .border, edge: .minX)
+        block.setBorderColor(NSColor.secondaryLabelColor.withAlphaComponent(0.5), for: .minX)
+        block.setWidth(12, type: .absoluteValueType, for: .padding, edge: .minX)
+        return block
     }
 
     fileprivate static func listAttributes(depth: Int) -> [NSAttributedString.Key: Any] {

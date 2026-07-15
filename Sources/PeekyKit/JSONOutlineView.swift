@@ -645,15 +645,22 @@ final class JSONOutlineView: NSView {
 
         switch node.type {
         case .object, .array:
-            if isExpanded {
+            if let key, node.isTruncated || !isExpanded {
+                result.append(plain("\(key): ", color: .secondaryLabelColor))
+            }
+            if node.isTruncated {
+                // 嵌套深度 >512 被截断的容器：childCount 归 0，不可展开
+                // （isExpandableItem 已按 childCount>0 把关）。摘要位置显示明确的
+                // 截断提示 + 次级警示色，与真正的空容器 "{…} 0 keys" 可区分，
+                // 避免用户误以为内容本就为空。
+                let bracket = node.type == .object ? "{\u{2026}}" : "[\u{2026}]"
+                result.append(plain("\(bracket) depth-truncated", color: .systemOrange))
+            } else if isExpanded {
                 // 展开后该行只显示 key（或索引）；子内容已由子行呈现。无 key 的根容器
                 // 退化显示裸括号，避免完全空白的行。
                 let label = key ?? (node.type == .object ? "{}" : "[]")
                 result.append(plain(label, color: .secondaryLabelColor))
             } else {
-                if let key {
-                    result.append(plain("\(key): ", color: .secondaryLabelColor))
-                }
                 let bracket = node.type == .object ? "{\u{2026}}" : "[\u{2026}]"
                 let unit = node.type == .object ? "keys" : "items"
                 result.append(plain("\(bracket) \(node.childCount) \(unit)", color: .tertiaryLabelColor))

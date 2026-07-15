@@ -6,8 +6,11 @@
 - `PreviewRenderer` 是"决策层"：选 Raw/Formatted 路径、执行性能预算降级、委派叶子模块——不碰视图几何。
 
 ## 视图约定
-- 一切内容渲染进单一 `NSTextView`（`DropTextView`）的 `NSAttributedString`；gutter（`PreviewGutterView`，与 scrollView 平级的独立 `NSView`，由 `DropTextView.onDidDraw` 回调驱动跟随重绘；macOS 26 起 `NSRulerView` 的 clipView.bounds 负偏移几何会让 `NSTextView` 正文不绘制，故 gutter 不走 ruler）与 overlay（记录分隔线/缩进参考线/注解）在 draw 时按**可见 glyph 范围**增量绘制，虚拟化交给 `NSLayoutManager`。
+- 文本类内容渲染进单一 `NSTextView`（`DropTextView`）的 `NSAttributedString`；JSON/JSONL 默认走 `JSONOutlineView`（view-based NSOutlineView + `JSONTreeIndex` 惰性数据源 + >100 分桶），原文文本模式可切换。
+- gutter = `PreviewGutterView`（`NSRulerView` 子类，scrollView 的 verticalRulerView）：`drawHashMarksAndLabels` 全接管，仅枚举可见 glyph 范围，**每个逻辑行只在首个视觉行片段绘行号**（对比 line-start 偏移命中法，折行后续行天然不编号）；滚动同步用 `convert(NSZeroPoint, from: textView)` 坐标平移，bounds/frame/didChange 三路通知触发重绘。overlay（记录分隔线/注解）同样按可见范围增量绘制，虚拟化交给 `NSLayoutManager`。
 - 行号查找用预计算 line-start 偏移 + 二分。
+- **异步分块上色的代际防护**：流式高亮（`highlightStream`）的消费 Task 必须挂 `highlightGeneration` + `activeTabID` 双校验，`renderActiveTab()` 开头单点 `invalidateHighlighting()`（取消在途 Task 并递增代际）——杜绝旧文档的迟到 chunk 刷到新内容。上色只 `addAttribute`，绝不整文重设 attributedString。
+- **JSC 服务约定**（`HighlightService` 为范本）：JSContext 单例 + 私有串行队列承载全部 JS 执行；预算/合法性检查在 Swift 侧前置（不进 JS）；任何 bundle 缺失/JS 异常 → 永久降级返回 nil + 一次性日志，**永不崩溃**；资源寻径多候选（.app Contents/Resources 与 swift build 输出目录），寻径失败同样走降级。
 - **自绘视图必须 `clipsToBounds = true`**：macOS 14 起 NSView 默认不裁剪，`draw(_:)` 收到的 dirtyRect 可远大于 bounds（窗口首帧为整窗），`fill(dirtyRect)` 会把背景涂到兄弟视图上（表现为兄弟"空白"，且 resize 救不回）。
 - **textView 换行/不换行两分支都必须显式 `maxSize = greatestFiniteMagnitude`**：NSTextView 布局驱动的 frame 增长走 `setConstrainedFrameSize`，被钳在 maxSize 内，而默认 maxSize 是初始 frame（视口大小）——漏设时长文档 frame 长不过视口高度，scrollView 没有可滚动区域（`applyLineWrapping` 两分支均已设置）。
 - **文档布局由渲染管线主动推进**：macOS 26 上 TextKit1 惰性布局不自行推进；`PreviewWindowController.startLayoutPump()` 在每次内容/换行模式变化后主线程分片 `ensureLayout`（每拍 64k 字符、`main.async` 让出 runloop），frame 渐进长高、交互不阻塞。gutter/overlay 绘制保持零布局副作用（`withoutAdditionalLayout` 变体）只读已就绪数据；程序化跳转（`scrollToLine` 等）在 `scrollRangeToVisible` 前对目标 range 先 `ensureLayout`。
