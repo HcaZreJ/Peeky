@@ -10,6 +10,8 @@ private struct PreviewTab {
     var collapseNestedJSON: Bool
     var targetLine: Int?
     var targetColumn: Int?
+    /// 后台构建好的 JSON/JSONL 树索引缓存；tab 重新激活时直接复用，不重新构建。
+    var jsonTreeIndex: JSONTreeIndex?
 
     init(url: URL, document: LoadedText?, errorMessage: String?) {
         self.id = UUID()
@@ -260,7 +262,7 @@ private final class FlippedStackView: NSStackView {
     override var isFlipped: Bool { true }
 }
 
-final class PreviewWindowController: NSWindowController, NSWindowDelegate {
+final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMenuDelegate {
     var onOpenRequested: (() -> Void)?
     var onURLsDropped: (([URL]) -> Void)?
     var onClose: (() -> Void)?
@@ -296,10 +298,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
     private let copyButton = NSButton()
     private let revealButton = NSButton()
     private let openButton = NSButton()
+    private let copyMenu = NSMenu()
+    private var copyRelativePathMenuItem: NSMenuItem?
     private let scrollView = DropScrollView()
     private let gutterView = PreviewGutterView()
-    private var gutterWidthConstraint: NSLayoutConstraint?
     private let textView = DropTextView()
+    private let jsonOutlineView = JSONOutlineView()
     private let emptyView = NSStackView()
 
     private var tabs: [PreviewTab] = []
@@ -314,6 +318,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
 
     var isEmpty: Bool {
         tabs.isEmpty
+    }
+
+    var activeFileURL: URL? {
+        activeTab?.url
     }
 
     init() {
@@ -414,12 +422,11 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         rootView.addSubview(contentView)
         setupHeader()
         setupTextView()
+        setupJSONOutlineView()
         setupEmptyView()
 
         let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: 210)
         self.sidebarWidthConstraint = sidebarWidthConstraint
-        let gutterWidthConstraint = gutterView.widthAnchor.constraint(equalToConstant: 0)
-        self.gutterWidthConstraint = gutterWidthConstraint
 
         NSLayoutConstraint.activate([
             sidebarView.topAnchor.constraint(equalTo: rootView.topAnchor),
@@ -437,15 +444,15 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
             headerView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             headerView.heightAnchor.constraint(equalToConstant: 50),
 
-            gutterView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
-            gutterView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            gutterView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            gutterWidthConstraint,
-
             scrollView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: gutterView.trailingAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+
+            jsonOutlineView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
+            jsonOutlineView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            jsonOutlineView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            jsonOutlineView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
             emptyView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             emptyView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor)
@@ -734,9 +741,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         )
         foldButton.setButtonType(.toggle)
         configureIconButton(wrapButton, symbol: "text.alignleft", tooltip: "Toggle line wrap", action: #selector(toggleWrap(_:)))
-        configureIconButton(copyButton, symbol: "doc.on.doc", tooltip: "Copy", action: #selector(copyPreview(_:)))
+        configureIconButton(copyButton, symbol: "doc.on.doc", tooltip: "Copy", action: #selector(showCopyMenu(_:)))
         configureIconButton(revealButton, symbol: "magnifyingglass", tooltip: "Reveal in Finder", action: #selector(revealInFinder(_:)))
         configureIconButton(openButton, symbol: "folder", tooltip: "Open", action: #selector(openClicked(_:)))
+        configureCopyMenu()
 
         let controls = NSStackView(views: [modeControl, foldButton, wrapButton, copyButton, revealButton, openButton])
         controls.orientation = .horizontal
@@ -776,8 +784,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         scrollView.onFileDragActiveChanged = { [weak self] active in
             self?.rootView.setDropHighlight(active)
         }
-        gutterView.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(gutterView)
         contentView.addSubview(scrollView)
 
         textView.isEditable = false
@@ -806,10 +812,18 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         }
 
         scrollView.documentView = textView
-        gutterView.connect(textView: textView)
-        textView.onDidDraw = { [weak self] in
-            self?.gutterView.textViewDidDraw()
-        }
+        scrollView.hasVerticalRuler = true
+        scrollView.verticalRulerView = gutterView
+        gutterView.connect(textView: textView, scrollView: scrollView)
+    }
+
+    /// JSON/JSONL 默认视图：树。与 scrollView 同区域叠放，按 showJSONTree/showPlainText
+    /// 二选一显示；结构由树的系统缩进 + disclosure 三角表达，故树可见时行号 gutter
+    /// （scrollView 的 verticalRulerView）随 scrollView 一起隐藏。
+    private func setupJSONOutlineView() {
+        jsonOutlineView.translatesAutoresizingMaskIntoConstraints = false
+        jsonOutlineView.isHidden = true
+        contentView.addSubview(jsonOutlineView)
     }
 
     private func setupEmptyView() {
@@ -1057,6 +1071,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         startLayoutPump()
         let targetLocation = targetLine.flatMap { rendered.display.targetLocationsByOriginalLine[$0] }
         scheduleInitialScroll(targetLine: targetLine, targetLocation: targetLocation, tabID: tabID)
+
+        if document.kind == .json || document.kind == .jsonl {
+            presentJSONTree(document: document, tabID: tabID)
+        } else {
+            showPlainText()
+        }
     }
 
     private func renderError(message: String, url: URL) {
@@ -1072,13 +1092,55 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         applyDisplayMetadata(.plain)
         clearMarkdownOutline()
         showPreviewState()
+        showPlainText()
         applyLineWrapping()
         startLayoutPump()
     }
 
+    // MARK: - JSON 树 / 原文切换（接线点；R4d 加交互层与显式切换按钮）
+
+    /// JSON/JSONL 默认视图 = 树：索引已缓存（tab 曾激活过）直接无闪切换；否则先保持
+    /// 原文文本视图可见，后台构建索引，就绪且该 tab 仍激活时才切到树，避免闪切换/
+    /// 切错 tab 的竞态。
+    private func presentJSONTree(document: LoadedText, tabID: UUID) {
+        guard let tabIndex = tabs.firstIndex(where: { $0.id == tabID }) else { return }
+
+        if let cachedIndex = tabs[tabIndex].jsonTreeIndex {
+            showJSONTree(cachedIndex)
+            return
+        }
+
+        showPlainText()
+
+        let text = document.text
+        let kind = document.kind
+        DispatchQueue.global(qos: .userInitiated).async {
+            let builtIndex = JSONTreeIndex.build(text: text, kind: kind)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                guard let currentTabIndex = self.tabs.firstIndex(where: { $0.id == tabID }) else { return }
+                self.tabs[currentTabIndex].jsonTreeIndex = builtIndex
+                guard self.activeTabID == tabID else { return }
+                self.showJSONTree(builtIndex)
+            }
+        }
+    }
+
+    private func showJSONTree(_ index: JSONTreeIndex) {
+        guard let document = activeTab?.document else { return }
+        jsonOutlineView.setContent(index: index, text: document.text, kind: document.kind)
+        scrollView.isHidden = true
+        jsonOutlineView.isHidden = false
+    }
+
+    private func showPlainText() {
+        jsonOutlineView.isHidden = true
+        jsonOutlineView.reset()
+        scrollView.isHidden = false
+    }
+
     private func applyDisplayMetadata(_ display: PreviewDisplayMetadata) {
         gutterView.configuration = display.gutter
-        gutterWidthConstraint?.constant = display.gutter.width
         textView.overlayConfiguration = display.textOverlay
     }
 
@@ -1164,6 +1226,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         titleLabel.stringValue = "Peeky"
         emptyView.isHidden = false
         scrollView.isHidden = true
+        jsonOutlineView.isHidden = true
+        jsonOutlineView.reset()
         modeControl.isEnabled = false
         foldButton.isEnabled = false
         foldButton.state = .off
@@ -1178,7 +1242,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
     private func showPreviewState() {
         updateSidebarVisibility()
         emptyView.isHidden = true
-        scrollView.isHidden = false
     }
 
     private func applyLineWrapping() {
@@ -1297,13 +1360,271 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         )
     }
 
-    @objc private func copyPreview(_ sender: Any?) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(textView.string, forType: .string)
-    }
-
     @objc private func revealInFinder(_ sender: Any?) {
         guard let url = activeTab?.url else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    // MARK: - Copy menu (工具栏下拉 + Edit 主菜单共用的六项操作)
+
+    private func configureCopyMenu() {
+        copyMenu.delegate = self
+
+        let copyAllItem = NSMenuItem(title: "Copy All", action: #selector(copyAllMenuAction(_:)), keyEquivalent: "c")
+        copyAllItem.keyEquivalentModifierMask = [.command, .option]
+        copyAllItem.target = self
+        copyMenu.addItem(copyAllItem)
+
+        let copyAbsoluteItem = NSMenuItem(
+            title: "Copy Absolute Path",
+            action: #selector(copyAbsolutePathMenuAction(_:)),
+            keyEquivalent: "c"
+        )
+        copyAbsoluteItem.keyEquivalentModifierMask = [.command, .shift]
+        copyAbsoluteItem.target = self
+        copyMenu.addItem(copyAbsoluteItem)
+
+        let copyRelativeItem = NSMenuItem(
+            title: "Copy Relative Path",
+            action: #selector(copyRelativePathMenuAction(_:)),
+            keyEquivalent: "c"
+        )
+        copyRelativeItem.keyEquivalentModifierMask = [.command, .shift, .option]
+        copyRelativeItem.target = self
+        copyMenu.addItem(copyRelativeItem)
+        copyRelativePathMenuItem = copyRelativeItem
+
+        copyMenu.addItem(.separator())
+
+        let copyFileItem = NSMenuItem(title: "Copy File", action: #selector(copyFileMenuAction(_:)), keyEquivalent: "")
+        copyFileItem.target = self
+        copyMenu.addItem(copyFileItem)
+
+        let copyPathLineItem = NSMenuItem(
+            title: "Copy Path:Line",
+            action: #selector(copyPathLineMenuAction(_:)),
+            keyEquivalent: ""
+        )
+        copyPathLineItem.target = self
+        copyMenu.addItem(copyPathLineItem)
+
+        copyMenu.addItem(.separator())
+
+        let openInEditorItem = NSMenuItem(
+            title: "Open in Editor",
+            action: #selector(openInEditorMenuAction(_:)),
+            keyEquivalent: "e"
+        )
+        openInEditorItem.keyEquivalentModifierMask = [.command]
+        openInEditorItem.target = self
+        copyMenu.addItem(openInEditorItem)
+    }
+
+    /// 弹出前隐藏「复制相对路径」——无 repo root 时该项不出现。
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === copyMenu else { return }
+        copyRelativePathMenuItem?.isHidden = !hasRepoRootForActiveFile
+    }
+
+    private var hasRepoRootForActiveFile: Bool {
+        guard let url = activeTab?.url else { return false }
+        return RepoRoot.discover(from: url) != nil
+    }
+
+    @objc private func showCopyMenu(_ sender: Any?) {
+        copyMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: copyButton.bounds.height + 4), in: copyButton)
+    }
+
+    @objc private func copyAllMenuAction(_ sender: Any?) {
+        copyAllText()
+    }
+
+    @objc private func copyAbsolutePathMenuAction(_ sender: Any?) {
+        copyAbsolutePath()
+    }
+
+    @objc private func copyRelativePathMenuAction(_ sender: Any?) {
+        copyRelativePath()
+    }
+
+    @objc private func copyFileMenuAction(_ sender: Any?) {
+        copyFileReference()
+    }
+
+    @objc private func copyPathLineMenuAction(_ sender: Any?) {
+        copyPathLineReference()
+    }
+
+    @objc private func openInEditorMenuAction(_ sender: Any?) {
+        openInEditor()
+    }
+
+    /// ① 复制全文：TextFileLoader 的原始文本，不是渲染后 attributed 文本。
+    func copyAllText() {
+        guard let document = activeTab?.document else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(document.text, forType: .string)
+    }
+
+    /// ② 复制绝对路径。
+    func copyAbsolutePath() {
+        guard let url = activeTab?.url else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(url.path, forType: .string)
+    }
+
+    /// ③ 复制相对 repo root 路径；无 repo 时静默不作为（菜单项本身已隐藏/禁用）。
+    func copyRelativePath() {
+        guard let url = activeTab?.url, let root = RepoRoot.discover(from: url) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(relativePath(of: url, root: root), forType: .string)
+    }
+
+    /// ④ 复制文件本体：Finder ⌘V 可粘贴出文件。
+    func copyFileReference() {
+        guard let url = activeTab?.url else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([url as NSURL])
+    }
+
+    /// ⑤ 复制 path:line：行号取当前选中文本首行，无选中时取可视区首个逻辑行。
+    func copyPathLineReference() {
+        guard let url = activeTab?.url else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("\(url.path):\(currentReferenceLine())", forType: .string)
+    }
+
+    /// ⑥ ⌘E 用编辑器打开：默认 app 是 VS Code/Cursor 时经其 URL scheme 带 path:line 定位。
+    func openInEditor() {
+        guard let url = activeTab?.url else { return }
+        openFileInEditor(url: url, line: currentReferenceLine())
+    }
+
+    private func relativePath(of url: URL, root: URL) -> String {
+        let rootComponents = root.standardizedFileURL.pathComponents
+        let urlComponents = url.standardizedFileURL.pathComponents
+
+        guard
+            urlComponents.count > rootComponents.count,
+            Array(urlComponents.prefix(rootComponents.count)) == rootComponents
+        else {
+            return url.standardizedFileURL.path
+        }
+
+        return urlComponents.dropFirst(rootComponents.count).joined(separator: "/")
+    }
+
+    private func currentReferenceLine() -> Int {
+        let selectedRange = textView.selectedRange()
+        let anchorLocation = selectedRange.length > 0 ? selectedRange.location : visibleFirstCharacterLocation()
+        return logicalLineNumber(atCharacterLocation: anchorLocation)
+    }
+
+    private func visibleFirstCharacterLocation() -> Int {
+        guard
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer
+        else {
+            return textView.selectedRange().location
+        }
+
+        let visibleGlyphRange = layoutManager.glyphRange(
+            forBoundingRectWithoutAdditionalLayout: textView.visibleRect,
+            in: textContainer
+        )
+        guard visibleGlyphRange.length > 0 else {
+            return textView.selectedRange().location
+        }
+
+        let charRange = layoutManager.characterRange(forGlyphRange: visibleGlyphRange, actualGlyphRange: nil)
+        return charRange.location
+    }
+
+    /// 当前 textView 内容（无论 raw/formatted）中，某字符位置对应的 1-based 逻辑行号；
+    /// 与 gutter 当前展示的编号规则一致（普通行号表 / JSONL 记录原始行 marker）。
+    private func logicalLineNumber(atCharacterLocation location: Int) -> Int {
+        switch gutterView.configuration.mode {
+        case .hidden:
+            return rawLineNumber(atCharacterLocation: location)
+        case .lineNumbers(let starts):
+            return lineStartIndex(for: location, in: starts) + 1
+        case .markers(let markers):
+            let sorted = markers.sorted { $0.characterLocation < $1.characterLocation }
+            var matchedLabel: String?
+            for marker in sorted where marker.characterLocation <= location {
+                matchedLabel = marker.label
+            }
+            if let matchedLabel, let value = Int(matchedLabel) {
+                return value
+            }
+            return rawLineNumber(atCharacterLocation: location)
+        }
+    }
+
+    private func lineStartIndex(for location: Int, in starts: [Int]) -> Int {
+        guard !starts.isEmpty else { return 0 }
+
+        var low = 0
+        var high = starts.count - 1
+        var match = 0
+
+        while low <= high {
+            let mid = (low + high) / 2
+            if starts[mid] <= location {
+                match = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+
+        return match
+    }
+
+    private func rawLineNumber(atCharacterLocation location: Int) -> Int {
+        let text = textView.string as NSString
+        guard text.length > 0 else { return 1 }
+
+        let safeLocation = min(max(location, 0), text.length)
+        var line = 1
+        var index = 0
+
+        while index < safeLocation {
+            let searchRange = NSRange(location: index, length: safeLocation - index)
+            let newlineRange = text.range(of: "\n", options: [], range: searchRange)
+            guard newlineRange.location != NSNotFound else { break }
+            line += 1
+            index = newlineRange.location + newlineRange.length
+        }
+
+        return line
+    }
+
+    private func openFileInEditor(url: URL, line: Int) {
+        guard let editorURL = NSWorkspace.shared.urlForApplication(toOpen: url) else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+
+        let bundleID = Bundle(url: editorURL)?.bundleIdentifier
+        let scheme: String?
+        switch bundleID {
+        case "com.microsoft.VSCode":
+            scheme = "vscode"
+        case "com.todesktop.230313mzl4w4u92":
+            scheme = "cursor"
+        default:
+            scheme = nil
+        }
+
+        if
+            let scheme,
+            let encodedPath = url.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+            let deepLinkURL = URL(string: "\(scheme)://file/\(encodedPath):\(line)")
+        {
+            NSWorkspace.shared.open(deepLinkURL)
+        } else {
+            NSWorkspace.shared.open(url)
+        }
     }
 }

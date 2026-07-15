@@ -15,6 +15,19 @@ cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$ROOT_DIR/Resources/Peeky.icns" "$APP_DIR/Contents/Resources/Peeky.icns"
 chmod +x "$APP_DIR/Contents/MacOS/Peeky"
 
+# SwiftPM copies PeekyKit's declared resources (shiki-bundle.js) into a
+# `Peeky_PeekyKit.bundle` next to the release binary. The generated
+# Bundle.module accessor resolves it via
+# `Bundle.main.bundleURL.appendingPathComponent("Peeky_PeekyKit.bundle")`,
+# and for a launched .app, Bundle.main.bundleURL is the .app's own root
+# directory (NOT Contents/Resources) — verified empirically with a
+# minimal .app-structured test binary. The resource bundle must therefore
+# sit at the top level of the .app, as a sibling of Contents/.
+for resource_bundle in "$ROOT_DIR"/.build/release/*.bundle; do
+  [[ -e "$resource_bundle" ]] || continue
+  cp -R "$resource_bundle" "$APP_DIR/"
+done
+
 codesign --force --sign - "$APP_DIR"
 
 echo "$APP_DIR"

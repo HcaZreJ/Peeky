@@ -2,3 +2,5 @@
 .DS_Store
 DerivedData/
 *.xcuserdata/
+scripts/shiki-bundle/node_modules/
+scripts/shiki-bundle/src/entry.generated.mjs

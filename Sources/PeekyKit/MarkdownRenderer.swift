@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Markdown
 
 struct MarkdownOutlineItem {
     let level: Int
@@ -14,425 +15,334 @@ struct MarkdownRenderResult {
 }
 
 enum MarkdownRenderer {
-    private enum TableAlignment {
-        case left
-        case center
-        case right
-    }
+    /// Carries the fenced-code-block language (if any) on the corresponding
+    /// attributed run, so a future syntax-highlighting pass can pick it up
+    /// without re-parsing the Markdown source.
+    static let codeLanguageAttributeKey = NSAttributedString.Key("peeky.codeLanguage")
 
-    private struct MarkdownTable {
-        let rows: [[String]]
-        let alignments: [TableAlignment]
-        let endIndex: Int
-    }
+    /// swift-markdown only attaches the `table`/`strikethrough`/`tasklist`
+    /// cmark-gfm syntax extensions (see `CommonMarkConverter.swift`); GFM's
+    /// bare-URL "autolink" extension is not wired up, so plain `Text` nodes
+    /// keep literal "https://…" runs as-is. `NSDataDetector` (Foundation,
+    /// no extra dependency) reliably finds http(s)/www/email spans — including
+    /// correct trailing-punctuation trimming — so it stands in for that
+    /// missing extension when a `Text` run is appended.
+    fileprivate static let autolinkDetector = try? NSDataDetector(
+        types: NSTextCheckingResult.CheckingType.link.rawValue
+    )
 
     static func render(_ text: String) -> NSAttributedString {
         renderWithOutline(text).attributedText
     }
 
     static func renderWithOutline(_ text: String) -> MarkdownRenderResult {
-        let output = NSMutableAttributedString()
-        let lines = text.components(separatedBy: .newlines)
-        var outline: [MarkdownOutlineItem] = []
-        var inCodeBlock = false
-        var lineIndex = 0
-
-        while lineIndex < lines.count {
-            let rawLine = lines[lineIndex]
-            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
-
-            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
-                inCodeBlock.toggle()
-                lineIndex += 1
-                continue
-            }
-
-            if inCodeBlock {
-                append(rawLine + "\n", to: output, attributes: codeBlockAttributes())
-                lineIndex += 1
-                continue
-            }
-
-            if trimmed.isEmpty {
-                output.append(NSAttributedString(string: "\n", attributes: bodyAttributes()))
-                lineIndex += 1
-                continue
-            }
-
-            if let table = parseTable(in: lines, startingAt: lineIndex) {
-                appendTable(table, to: output)
-                lineIndex = table.endIndex
-                continue
-            }
-
-            if let heading = parseHeading(rawLine) {
-                outline.append(
-                    MarkdownOutlineItem(
-                        level: heading.level,
-                        title: heading.text,
-                        sourceLine: lineIndex + 1,
-                        renderedLocation: output.length
-                    )
-                )
-                append(heading.text + "\n", to: output, attributes: headingAttributes(level: heading.level))
-                lineIndex += 1
-                continue
-            }
-
-            if let quote = parseBlockQuote(rawLine) {
-                append("|\u{00a0}", to: output, attributes: quoteMarkAttributes())
-                appendInline(quote + "\n", to: output, attributes: quoteTextAttributes())
-                lineIndex += 1
-                continue
-            }
-
-            if let bullet = parseBullet(rawLine) {
-                append("\u{2022} ", to: output, attributes: listAttributes())
-                appendInline(bullet + "\n", to: output, attributes: listAttributes())
-                lineIndex += 1
-                continue
-            }
-
-            if let numbered = parseNumberedItem(rawLine) {
-                append(numbered.prefix, to: output, attributes: listAttributes())
-                appendInline(numbered.text + "\n", to: output, attributes: listAttributes())
-                lineIndex += 1
-                continue
-            }
-
-            appendInline(rawLine + "\n", to: output, attributes: bodyAttributes())
-            lineIndex += 1
+        let document = Document(parsing: text, options: [.disableSmartOpts])
+        let visitor = MarkdownAttributedVisitor()
+        for child in document.children {
+            visitor.visit(child)
         }
-
-        return MarkdownRenderResult(attributedText: output, outline: outline)
+        return MarkdownRenderResult(attributedText: visitor.output, outline: visitor.outline)
     }
 
     static func outline(in text: String) -> [MarkdownOutlineItem] {
-        let lines = text.components(separatedBy: .newlines)
-        var outline: [MarkdownOutlineItem] = []
-        var inCodeBlock = false
+        let document = Document(parsing: text, options: [.disableSmartOpts])
+        var items: [MarkdownOutlineItem] = []
+        for child in document.children {
+            collectOutline(child, into: &items)
+        }
+        return items
+    }
 
-        for (lineIndex, rawLine) in lines.enumerated() {
-            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
-
-            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
-                inCodeBlock.toggle()
-                continue
-            }
-
-            if inCodeBlock {
-                continue
-            }
-
-            if let heading = parseHeading(rawLine) {
-                outline.append(
+    private static func collectOutline(_ markup: Markup, into items: inout [MarkdownOutlineItem]) {
+        if let heading = markup as? Heading {
+            if heading.level <= 4 {
+                items.append(
                     MarkdownOutlineItem(
                         level: heading.level,
-                        title: heading.text,
-                        sourceLine: lineIndex + 1,
+                        title: plainDisplayText(of: heading),
+                        sourceLine: heading.range?.lowerBound.line ?? 0,
                         renderedLocation: nil
                     )
                 )
             }
+            return
         }
 
-        return outline
+        for child in markup.children {
+            collectOutline(child, into: &items)
+        }
     }
 
-    private static func parseHeading(_ line: String) -> (level: Int, text: String)? {
-        var level = 0
-        var index = line.startIndex
-
-        while index < line.endIndex, line[index] == "#", level < 6 {
-            level += 1
-            index = line.index(after: index)
+    /// Recursively flattens an element's readable text content, discarding
+    /// Markdown syntax markers (backticks, emphasis asterisks, link
+    /// brackets/URLs) so headings/table cells read naturally in the outline
+    /// sidebar and in column-width measurement.
+    fileprivate static func plainDisplayText(of markup: Markup) -> String {
+        if let text = markup as? Text {
+            return text.string
+        }
+        if let inlineCode = markup as? InlineCode {
+            return inlineCode.code
+        }
+        if markup is SoftBreak {
+            return " "
+        }
+        if markup is LineBreak {
+            return " "
+        }
+        if let html = markup as? InlineHTML {
+            return html.rawHTML
         }
 
-        guard level > 0, index < line.endIndex, line[index].isWhitespace else {
-            return nil
+        var combined = ""
+        for child in markup.children {
+            combined += plainDisplayText(of: child)
         }
-
-        let textStart = line.index(after: index)
-        return (level, String(line[textStart...]).trimmingCharacters(in: .whitespaces))
+        return combined
     }
 
-    private static func parseBlockQuote(_ line: String) -> String? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasPrefix(">") else { return nil }
-        return String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
+    // MARK: - Typography (GitHub Primer derived values)
+
+    fileprivate static func append(
+        _ text: String,
+        to output: NSMutableAttributedString,
+        attributes: [NSAttributedString.Key: Any]
+    ) {
+        guard !text.isEmpty else { return }
+        output.append(NSAttributedString(string: text, attributes: attributes))
     }
 
-    private static func parseBullet(_ line: String) -> String? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        for marker in ["- ", "* ", "+ "] where trimmed.hasPrefix(marker) {
-            return String(trimmed.dropFirst(marker.count))
-        }
-        return nil
+    fileprivate static func bodyFont() -> NSFont {
+        NSFont.systemFont(ofSize: 16)
     }
 
-    private static func parseNumberedItem(_ line: String) -> (prefix: String, text: String)? {
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard let dot = trimmed.firstIndex(of: ".") else { return nil }
-        let number = trimmed[..<dot]
-        guard !number.isEmpty, number.allSatisfy(\.isNumber) else { return nil }
-
-        let afterDot = trimmed.index(after: dot)
-        guard afterDot < trimmed.endIndex, trimmed[afterDot].isWhitespace else { return nil }
-
-        let textStart = trimmed.index(after: afterDot)
-        return ("\(number). ", String(trimmed[textStart...]))
+    fileprivate static func boldFont(size: CGFloat) -> NSFont {
+        NSFontManager.shared.convert(NSFont.systemFont(ofSize: size), toHaveTrait: .boldFontMask)
     }
 
-    private static func parseTable(in lines: [String], startingAt startIndex: Int) -> MarkdownTable? {
-        guard startIndex + 1 < lines.count else { return nil }
-
-        let headerLine = lines[startIndex]
-        let separatorLine = lines[startIndex + 1]
-        guard containsTablePipe(headerLine) || containsTablePipe(separatorLine) else { return nil }
-
-        let header = splitTableRow(headerLine)
-        guard let alignments = parseTableSeparator(separatorLine),
-              !header.isEmpty,
-              header.count == alignments.count else {
-            return nil
-        }
-
-        var rows = [normalizeTableRow(header, columnCount: alignments.count)]
-        var lineIndex = startIndex + 2
-
-        while lineIndex < lines.count {
-            let line = lines[lineIndex]
-            guard !line.trimmingCharacters(in: .whitespaces).isEmpty,
-                  containsTablePipe(line) else {
-                break
-            }
-
-            let cells = splitTableRow(line)
-            guard !cells.isEmpty else { break }
-
-            rows.append(normalizeTableRow(cells, columnCount: alignments.count))
-            lineIndex += 1
-        }
-
-        return MarkdownTable(rows: rows, alignments: alignments, endIndex: lineIndex)
+    fileprivate static func boldFont(from font: NSFont?) -> NSFont {
+        NSFontManager.shared.convert(font ?? bodyFont(), toHaveTrait: .boldFontMask)
     }
 
-    private static func parseTableSeparator(_ line: String) -> [TableAlignment]? {
-        let cells = splitTableRow(line)
-        guard !cells.isEmpty else { return nil }
-
-        var alignments: [TableAlignment] = []
-        for cell in cells {
-            let marker = cell.filter { !$0.isWhitespace }
-            let startsWithColon = marker.first == ":"
-            let endsWithColon = marker.last == ":"
-            var hyphenMarker = marker
-            if startsWithColon {
-                hyphenMarker.removeFirst()
-            }
-            if endsWithColon {
-                hyphenMarker.removeLast()
-            }
-
-            guard hyphenMarker.count >= 3,
-                  hyphenMarker.allSatisfy({ $0 == "-" }) else {
-                return nil
-            }
-
-            if startsWithColon && endsWithColon {
-                alignments.append(.center)
-            } else if endsWithColon {
-                alignments.append(.right)
-            } else {
-                alignments.append(.left)
-            }
-        }
-
-        return alignments
+    fileprivate static func italicFont(from font: NSFont?) -> NSFont {
+        NSFontManager.shared.convert(font ?? bodyFont(), toHaveTrait: .italicFontMask)
     }
 
-    private static func splitTableRow(_ line: String) -> [String] {
-        var cells: [String] = []
-        var current = ""
-        var isEscaping = false
-        var activeBacktickCount = 0
-        var index = line.startIndex
+    fileprivate static func bodyAttributes(indent: CGFloat = 0) -> [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineHeightMultiple = 1.5
+        paragraph.paragraphSpacingBefore = 16
+        paragraph.paragraphSpacing = 16
+        paragraph.headIndent = indent
+        paragraph.firstLineHeadIndent = indent
 
-        while index < line.endIndex {
-            let character = line[index]
-
-            if isEscaping {
-                current.append(character)
-                isEscaping = false
-                index = line.index(after: index)
-                continue
-            }
-
-            if character == "\\", activeBacktickCount == 0 {
-                isEscaping = true
-                index = line.index(after: index)
-                continue
-            }
-
-            if character == "`" {
-                let tickCount = consecutiveBacktickCount(in: line, startingAt: index)
-                if activeBacktickCount == 0 {
-                    activeBacktickCount = tickCount
-                } else if activeBacktickCount == tickCount {
-                    activeBacktickCount = 0
-                }
-
-                current.append(String(repeating: "`", count: tickCount))
-                index = line.index(index, offsetBy: tickCount)
-                continue
-            }
-
-            if character == "|", activeBacktickCount == 0 {
-                cells.append(current.trimmingCharacters(in: .whitespaces))
-                current.removeAll(keepingCapacity: true)
-            } else {
-                current.append(character)
-            }
-
-            index = line.index(after: index)
-        }
-
-        if isEscaping {
-            current.append("\\")
-        }
-
-        cells.append(current.trimmingCharacters(in: .whitespaces))
-
-        if startsWithTableDelimiter(line), cells.first == "" {
-            cells.removeFirst()
-        }
-        if endsWithTableDelimiter(line), cells.last == "" {
-            cells.removeLast()
-        }
-
-        return cells
+        return [
+            .font: bodyFont(),
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraph
+        ]
     }
 
-    private static func normalizeTableRow(_ cells: [String], columnCount: Int) -> [String] {
-        var normalized = Array(cells.prefix(columnCount))
-        if normalized.count < columnCount {
-            normalized.append(contentsOf: Array(repeating: "", count: columnCount - normalized.count))
+    fileprivate static func headingFontSize(level: Int) -> CGFloat {
+        switch level {
+        case 1: return 32
+        case 2: return 24
+        case 3: return 20
+        default: return 16
         }
-        return normalized
     }
 
-    private static func containsTablePipe(_ line: String) -> Bool {
-        var isEscaping = false
-        var activeBacktickCount = 0
-        var index = line.startIndex
+    fileprivate static func headingAttributes(level: Int) -> [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineHeightMultiple = 1.25
+        // Primer's markdown-body headings carry more space above than below
+        // (24pt vs 16pt) to visually group each heading with the content
+        // that follows it rather than the content above.
+        paragraph.paragraphSpacingBefore = 24
+        paragraph.paragraphSpacing = 16
 
-        while index < line.endIndex {
-            let character = line[index]
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: boldFont(size: headingFontSize(level: level)),
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraph
+        ]
 
-            if isEscaping {
-                isEscaping = false
-                index = line.index(after: index)
-                continue
-            }
-
-            if character == "\\", activeBacktickCount == 0 {
-                isEscaping = true
-                index = line.index(after: index)
-                continue
-            }
-
-            if character == "`" {
-                let tickCount = consecutiveBacktickCount(in: line, startingAt: index)
-                if activeBacktickCount == 0 {
-                    activeBacktickCount = tickCount
-                } else if activeBacktickCount == tickCount {
-                    activeBacktickCount = 0
-                }
-                index = line.index(index, offsetBy: tickCount)
-                continue
-            }
-
-            if character == "|", activeBacktickCount == 0 {
-                return true
-            }
-
-            index = line.index(after: index)
+        if level <= 2 {
+            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            attributes[.underlineColor] = NSColor.separatorColor
         }
 
-        return false
+        return attributes
     }
 
-    private static func startsWithTableDelimiter(_ line: String) -> Bool {
-        guard let firstNonWhitespace = line.firstIndex(where: { !$0.isWhitespace }) else {
-            return false
+    fileprivate static func quoteAttributes(depth: Int) -> [NSAttributedString.Key: Any] {
+        let indent = CGFloat(max(depth, 1)) * 20
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineHeightMultiple = 1.5
+        paragraph.paragraphSpacingBefore = 16
+        paragraph.paragraphSpacing = 16
+        paragraph.headIndent = indent
+        paragraph.firstLineHeadIndent = indent
+
+        return [
+            .font: bodyFont(),
+            .foregroundColor: NSColor.secondaryLabelColor,
+            .paragraphStyle: paragraph
+        ]
+    }
+
+    fileprivate static func listAttributes(depth: Int) -> [NSAttributedString.Key: Any] {
+        let unit: CGFloat = 24
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineHeightMultiple = 1.5
+        paragraph.paragraphSpacingBefore = 4
+        paragraph.paragraphSpacing = 4
+        paragraph.headIndent = unit * CGFloat(depth + 1)
+        paragraph.firstLineHeadIndent = unit * CGFloat(depth)
+
+        return [
+            .font: bodyFont(),
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraph
+        ]
+    }
+
+    /// Fenced/indented code blocks are appended as a single multi-line run
+    /// sharing one `NSParagraphStyle`. Any nonzero `paragraphSpacing`/
+    /// `paragraphSpacingBefore` here would apply to *every* embedded source
+    /// line (each one is its own NSString paragraph), stacking up visible
+    /// gaps between every line of code. Vertical breathing room around the
+    /// block is instead delegated to the neighboring blocks' own
+    /// `paragraphSpacingBefore`/`paragraphSpacing` (body/heading/list/quote
+    /// all carry a nonzero value on both sides), so the gap is always
+    /// supplied by whichever adjacent block isn't a code block.
+    fileprivate static func codeBlockAttributes() -> [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineHeightMultiple = 1.35
+        paragraph.paragraphSpacingBefore = 0
+        paragraph.paragraphSpacing = 0
+        paragraph.headIndent = 12
+        paragraph.firstLineHeadIndent = 12
+        paragraph.tailIndent = -12
+
+        return [
+            .font: NSFont.monospacedSystemFont(ofSize: 13.6, weight: .regular),
+            .foregroundColor: NSColor.labelColor,
+            .backgroundColor: codeBlockBackgroundColor(),
+            .paragraphStyle: paragraph
+        ]
+    }
+
+    fileprivate static func inlineCodeAttributes(baseAttributes: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
+        var attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 13.6, weight: .regular),
+            .foregroundColor: inlineCodeForegroundColor(),
+            .backgroundColor: inlineCodeBackgroundColor()
+        ]
+
+        if let paragraphStyle = baseAttributes[.paragraphStyle] {
+            attributes[.paragraphStyle] = paragraphStyle
         }
-        return line[firstNonWhitespace] == "|"
+
+        return attributes
     }
 
-    private static func endsWithTableDelimiter(_ line: String) -> Bool {
-        guard let lastNonWhitespace = line.lastIndex(where: { !$0.isWhitespace }) else {
-            return false
+    fileprivate static func thematicBreakAttributes() -> [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.paragraphSpacingBefore = 16
+        paragraph.paragraphSpacing = 16
+
+        return [
+            .font: NSFont.systemFont(ofSize: 1),
+            .foregroundColor: NSColor.clear,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .underlineColor: NSColor.separatorColor,
+            .paragraphStyle: paragraph
+        ]
+    }
+
+    // MARK: - Colors
+
+    /// 把两个 NSColor 在指定外观下各自解析为具体 sRGB 分量后再混合，避免
+    /// `NSColor.blended(withFraction:of:)` 在无当前绘制外观上下文时按默认外观
+    /// （通常是浅色）一次性烘焙出固定色，导致深色模式下仍显示浅色底。
+    private static func resolvedColor(_ color: NSColor, for appearanceName: NSAppearance.Name) -> NSColor {
+        var resolved = color
+        NSAppearance(named: appearanceName)?.performAsCurrentDrawingAppearance {
+            resolved = color.usingColorSpace(.sRGB) ?? color
         }
-        return line[lastNonWhitespace] == "|"
+        return resolved
     }
 
-    private static func consecutiveBacktickCount(in line: String, startingAt startIndex: String.Index) -> Int {
-        var count = 0
-        var index = startIndex
-        while index < line.endIndex, line[index] == "`" {
-            count += 1
-            index = line.index(after: index)
+    private static func blendedColor(
+        _ base: NSColor,
+        with tint: NSColor,
+        fraction: CGFloat,
+        for appearanceName: NSAppearance.Name
+    ) -> NSColor {
+        let resolvedBase = resolvedColor(base, for: appearanceName)
+        let resolvedTint = resolvedColor(tint, for: appearanceName)
+        return resolvedBase.blended(withFraction: fraction, of: resolvedTint) ?? resolvedBase
+    }
+
+    /// 构造一个真正随外观切换重新取值的 NSColor：浅色/深色两个具体值在实际
+    /// 绘制时按当前外观选取，而不是在构造属性字符串那一刻就被写死。
+    private static func adaptiveColor(light: NSColor, dark: NSColor) -> NSColor {
+        NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
         }
-        return count
     }
 
-    private static func appendTable(_ table: MarkdownTable, to output: NSMutableAttributedString) {
-        let textTable = NSTextTable()
-        textTable.numberOfColumns = table.alignments.count
-        textTable.layoutAlgorithm = .automaticLayoutAlgorithm
-        textTable.collapsesBorders = true
-        textTable.hidesEmptyCells = false
-        textTable.setContentWidth(100, type: .percentageValueType)
-        textTable.setWidth(0, type: .absoluteValueType, for: .border)
-        let columnWidthPercentages = tableColumnWidthPercentages(table)
-
-        for rowIndex in table.rows.indices {
-            let isHeader = rowIndex == 0
-            let isLastRow = rowIndex == table.rows.index(before: table.rows.endIndex)
-            let row = table.rows[rowIndex]
-
-            for columnIndex in row.indices {
-                let cellBlock = tableCellBlock(
-                    table: textTable,
-                    rowIndex: rowIndex,
-                    columnIndex: columnIndex,
-                    widthPercentage: columnWidthPercentages[columnIndex],
-                    isHeader: isHeader
-                )
-                let paragraph = tableParagraphStyle(
-                    cellBlock: cellBlock,
-                    alignment: table.alignments[columnIndex],
-                    isFirstRow: isHeader,
-                    isLastRow: isLastRow
-                )
-                let attributes = tableCellAttributes(isHeader: isHeader, paragraphStyle: paragraph)
-                appendInline(row[columnIndex], to: output, attributes: attributes)
-                append("\n", to: output, attributes: attributes)
-            }
-        }
-
-        output.append(NSAttributedString(string: "\n", attributes: bodyAttributes()))
+    private static func codeBlockBackgroundColor() -> NSColor {
+        adaptiveColor(
+            light: blendedColor(.textBackgroundColor, with: .systemBlue, fraction: 0.08, for: .aqua),
+            dark: blendedColor(.textBackgroundColor, with: .systemBlue, fraction: 0.08, for: .darkAqua)
+        )
     }
 
-    private static func tableColumnWidthPercentages(_ table: MarkdownTable) -> [CGFloat] {
-        let columnCount = table.alignments.count
+    private static func inlineCodeBackgroundColor() -> NSColor {
+        adaptiveColor(
+            light: blendedColor(.textBackgroundColor, with: .systemPink, fraction: 0.08, for: .aqua),
+            dark: blendedColor(.textBackgroundColor, with: .systemPink, fraction: 0.08, for: .darkAqua)
+        )
+    }
+
+    private static func inlineCodeForegroundColor() -> NSColor {
+        let darkPink = resolvedColor(.systemPink, for: .darkAqua)
+        return adaptiveColor(
+            light: resolvedColor(.systemPink, for: .aqua),
+            dark: darkPink.blended(withFraction: 0.25, of: .white) ?? darkPink
+        )
+    }
+
+    fileprivate static func tableHeaderBackgroundColor() -> NSColor {
+        adaptiveColor(
+            light: blendedColor(.controlBackgroundColor, with: .controlAccentColor, fraction: 0.18, for: .aqua),
+            dark: blendedColor(.controlBackgroundColor, with: .controlAccentColor, fraction: 0.18, for: .darkAqua)
+        )
+    }
+
+    fileprivate static func tableZebraBackgroundColor() -> NSColor {
+        adaptiveColor(
+            light: blendedColor(.textBackgroundColor, with: .labelColor, fraction: 0.035, for: .aqua),
+            dark: blendedColor(.textBackgroundColor, with: .labelColor, fraction: 0.035, for: .darkAqua)
+        )
+    }
+
+    // MARK: - Tables
+
+    fileprivate static func tableHeaderFont() -> NSFont {
+        boldFont(size: bodyFont().pointSize)
+    }
+
+    fileprivate static func tableColumnWidthPercentages(rows: [[Table.Cell]], columnCount: Int) -> [CGFloat] {
         guard columnCount > 0 else { return [] }
 
         var measuredWidths = Array(repeating: CGFloat(48), count: columnCount)
-        for rowIndex in table.rows.indices {
+        for (rowIndex, row) in rows.enumerated() {
             let font = rowIndex == 0 ? tableHeaderFont() : bodyFont()
-            for columnIndex in table.rows[rowIndex].indices {
-                let text = inlinePlainText(table.rows[rowIndex][columnIndex])
+            for (columnIndex, cell) in row.enumerated() where columnIndex < columnCount {
+                let text = plainDisplayText(of: cell)
                 let width = ceil((text as NSString).size(withAttributes: [.font: font]).width)
                 measuredWidths[columnIndex] = max(measuredWidths[columnIndex], width)
             }
@@ -487,243 +397,13 @@ enum MarkdownRenderer {
         return balanced
     }
 
-    private static func inlinePlainText(_ text: String) -> String {
-        let output = NSMutableAttributedString()
-        appendInline(text, to: output, attributes: bodyAttributes())
-        return output.string
-    }
-
-    private static func appendInline(
-        _ text: String,
-        to output: NSMutableAttributedString,
-        attributes: [NSAttributedString.Key: Any]
-    ) {
-        var index = text.startIndex
-        var plainStart = index
-
-        func flushPlain(upTo end: String.Index) {
-            guard plainStart < end else { return }
-            append(String(text[plainStart..<end]), to: output, attributes: attributes)
-        }
-
-        while index < text.endIndex {
-            if text[index] == "`",
-               let close = text[text.index(after: index)...].firstIndex(of: "`") {
-                flushPlain(upTo: index)
-                let start = text.index(after: index)
-                append(String(text[start..<close]), to: output, attributes: inlineCodeAttributes(baseAttributes: attributes))
-                index = text.index(after: close)
-                plainStart = index
-                continue
-            }
-
-            if text[index...].hasPrefix("**"),
-               let close = text.range(of: "**", range: text.index(index, offsetBy: 2)..<text.endIndex) {
-                flushPlain(upTo: index)
-                let start = text.index(index, offsetBy: 2)
-                var bold = attributes
-                let baseFont = attributes[.font] as? NSFont ?? bodyFont()
-                bold[.font] = NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
-                append(String(text[start..<close.lowerBound]), to: output, attributes: bold)
-                index = close.upperBound
-                plainStart = index
-                continue
-            }
-
-            if text[index] == "[",
-               let closeBracket = text[index...].firstIndex(of: "]"),
-               closeBracket < text.index(before: text.endIndex),
-               text[text.index(after: closeBracket)] == "(",
-               let closeParen = text[text.index(after: closeBracket)..<text.endIndex].firstIndex(of: ")") {
-                let urlStart = text.index(closeBracket, offsetBy: 2)
-                if urlStart < closeParen {
-                    flushPlain(upTo: index)
-                    let labelStart = text.index(after: index)
-                    let label = String(text[labelStart..<closeBracket])
-                    let url = String(text[urlStart..<closeParen])
-                    var link = attributes
-                    link[.foregroundColor] = NSColor.linkColor
-                    link[.underlineStyle] = NSUnderlineStyle.single.rawValue
-                    link[.link] = url
-                    append(label, to: output, attributes: link)
-                    index = text.index(after: closeParen)
-                    plainStart = index
-                    continue
-                }
-            }
-
-            index = text.index(after: index)
-        }
-
-        flushPlain(upTo: text.endIndex)
-    }
-
-    private static func append(
-        _ text: String,
-        to output: NSMutableAttributedString,
-        attributes: [NSAttributedString.Key: Any]
-    ) {
-        output.append(NSAttributedString(string: text, attributes: attributes))
-    }
-
-    private static func bodyFont() -> NSFont {
-        NSFont.systemFont(ofSize: 14)
-    }
-
-    private static func tableHeaderFont() -> NSFont {
-        NSFont.systemFont(ofSize: 14, weight: .semibold)
-    }
-
-    private static func bodyAttributes() -> [NSAttributedString.Key: Any] {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3
-        paragraph.paragraphSpacing = 7
-
-        return [
-            .font: bodyFont(),
-            .foregroundColor: NSColor.labelColor,
-            .paragraphStyle: paragraph
-        ]
-    }
-
-    private static func headingAttributes(level: Int) -> [NSAttributedString.Key: Any] {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.paragraphSpacingBefore = level <= 2 ? 12 : 8
-        paragraph.paragraphSpacing = 6
-
-        let size: CGFloat
-        switch level {
-        case 1: size = 28
-        case 2: size = 22
-        case 3: size = 18
-        default: size = 15
-        }
-
-        return [
-            .font: NSFont.systemFont(ofSize: size, weight: .semibold),
-            .foregroundColor: NSColor.labelColor,
-            .paragraphStyle: paragraph
-        ]
-    }
-
-    /// 把两个 NSColor 在指定外观下各自解析为具体 sRGB 分量后再混合，避免
-    /// `NSColor.blended(withFraction:of:)` 在无当前绘制外观上下文时按默认外观
-    /// （通常是浅色）一次性烘焙出固定色，导致深色模式下仍显示浅色底。
-    private static func resolvedColor(_ color: NSColor, for appearanceName: NSAppearance.Name) -> NSColor {
-        var resolved = color
-        NSAppearance(named: appearanceName)?.performAsCurrentDrawingAppearance {
-            resolved = color.usingColorSpace(.sRGB) ?? color
-        }
-        return resolved
-    }
-
-    private static func blendedColor(
-        _ base: NSColor,
-        with tint: NSColor,
-        fraction: CGFloat,
-        for appearanceName: NSAppearance.Name
-    ) -> NSColor {
-        let resolvedBase = resolvedColor(base, for: appearanceName)
-        let resolvedTint = resolvedColor(tint, for: appearanceName)
-        return resolvedBase.blended(withFraction: fraction, of: resolvedTint) ?? resolvedBase
-    }
-
-    /// 构造一个真正随外观切换重新取值的 NSColor：浅色/深色两个具体值在实际
-    /// 绘制时按当前外观选取，而不是在构造属性字符串那一刻就被写死。
-    private static func adaptiveColor(light: NSColor, dark: NSColor) -> NSColor {
-        NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
-        }
-    }
-
-    private static func codeBlockBackgroundColor() -> NSColor {
-        adaptiveColor(
-            light: blendedColor(.textBackgroundColor, with: .systemBlue, fraction: 0.08, for: .aqua),
-            dark: blendedColor(.textBackgroundColor, with: .systemBlue, fraction: 0.08, for: .darkAqua)
-        )
-    }
-
-    private static func inlineCodeBackgroundColor() -> NSColor {
-        adaptiveColor(
-            light: blendedColor(.textBackgroundColor, with: .systemPink, fraction: 0.08, for: .aqua),
-            dark: blendedColor(.textBackgroundColor, with: .systemPink, fraction: 0.08, for: .darkAqua)
-        )
-    }
-
-    private static func inlineCodeForegroundColor() -> NSColor {
-        let darkPink = resolvedColor(.systemPink, for: .darkAqua)
-        return adaptiveColor(
-            light: resolvedColor(.systemPink, for: .aqua),
-            dark: darkPink.blended(withFraction: 0.25, of: .white) ?? darkPink
-        )
-    }
-
-    private static func tableHeaderBackgroundColor() -> NSColor {
-        adaptiveColor(
-            light: blendedColor(.controlBackgroundColor, with: .controlAccentColor, fraction: 0.18, for: .aqua),
-            dark: blendedColor(.controlBackgroundColor, with: .controlAccentColor, fraction: 0.18, for: .darkAqua)
-        )
-    }
-
-    private static func codeBlockAttributes() -> [NSAttributedString.Key: Any] {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 2
-        paragraph.paragraphSpacing = 0
-
-        return [
-            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-            .foregroundColor: NSColor.labelColor,
-            .backgroundColor: codeBlockBackgroundColor(),
-            .paragraphStyle: paragraph
-        ]
-    }
-
-    private static func inlineCodeAttributes(baseAttributes: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
-        var attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular),
-            .foregroundColor: inlineCodeForegroundColor(),
-            .backgroundColor: inlineCodeBackgroundColor()
-        ]
-
-        if let paragraphStyle = baseAttributes[.paragraphStyle] {
-            attributes[.paragraphStyle] = paragraphStyle
-        }
-
-        return attributes
-    }
-
-    private static func quoteMarkAttributes() -> [NSAttributedString.Key: Any] {
-        [
-            .font: NSFont.monospacedSystemFont(ofSize: 14, weight: .medium),
-            .foregroundColor: NSColor.systemBlue
-        ]
-    }
-
-    private static func quoteTextAttributes() -> [NSAttributedString.Key: Any] {
-        var attributes = bodyAttributes()
-        attributes[.foregroundColor] = NSColor.secondaryLabelColor
-        return attributes
-    }
-
-    private static func listAttributes() -> [NSAttributedString.Key: Any] {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3
-        paragraph.paragraphSpacing = 4
-        paragraph.headIndent = 24
-
-        return [
-            .font: bodyFont(),
-            .foregroundColor: NSColor.labelColor,
-            .paragraphStyle: paragraph
-        ]
-    }
-
-    private static func tableCellBlock(
+    fileprivate static func tableCellBlock(
         table: NSTextTable,
         rowIndex: Int,
         columnIndex: Int,
         widthPercentage: CGFloat,
-        isHeader: Bool
+        isHeader: Bool,
+        isZebraStripe: Bool
     ) -> NSTextTableBlock {
         let block = NSTextTableBlock(
             table: table,
@@ -737,23 +417,30 @@ enum MarkdownRenderer {
         block.setWidth(8, type: .absoluteValueType, for: .padding)
         block.setWidth(1, type: .absoluteValueType, for: .border)
         block.setBorderColor(NSColor.separatorColor.withAlphaComponent(0.45))
-        block.backgroundColor = isHeader
-            ? tableHeaderBackgroundColor()
-            : NSColor.textBackgroundColor
+
+        if isHeader {
+            block.backgroundColor = tableHeaderBackgroundColor()
+        } else if isZebraStripe {
+            block.backgroundColor = tableZebraBackgroundColor()
+        } else {
+            block.backgroundColor = NSColor.textBackgroundColor
+        }
+
         return block
     }
 
-    private static func tableParagraphStyle(
+    fileprivate static func tableParagraphStyle(
         cellBlock: NSTextTableBlock,
-        alignment: TableAlignment,
+        alignment: Table.ColumnAlignment,
         isFirstRow: Bool,
         isLastRow: Bool
     ) -> NSMutableParagraphStyle {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3
-        paragraph.paragraphSpacingBefore = isFirstRow ? 8 : 0
-        paragraph.paragraphSpacing = isLastRow ? 8 : 0
+        paragraph.lineHeightMultiple = 1.4
+        paragraph.paragraphSpacingBefore = isFirstRow ? 16 : 0
+        paragraph.paragraphSpacing = isLastRow ? 16 : 0
         paragraph.textBlocks = [cellBlock]
+
         switch alignment {
         case .left:
             paragraph.alignment = .left
@@ -761,11 +448,14 @@ enum MarkdownRenderer {
             paragraph.alignment = .center
         case .right:
             paragraph.alignment = .right
+        @unknown default:
+            paragraph.alignment = .left
         }
+
         return paragraph
     }
 
-    private static func tableCellAttributes(
+    fileprivate static func tableCellAttributes(
         isHeader: Bool,
         paragraphStyle: NSParagraphStyle
     ) -> [NSAttributedString.Key: Any] {
@@ -774,5 +464,398 @@ enum MarkdownRenderer {
             .foregroundColor: NSColor.labelColor,
             .paragraphStyle: paragraphStyle
         ]
+    }
+}
+
+/// Single-pass `MarkupVisitor` that appends directly onto one shared
+/// `NSMutableAttributedString` (no per-node intermediate attributed strings
+/// are built and re-concatenated), so large documents stay within the 8MB
+/// rich-formatting budget without repeated whole-document relayout.
+private final class MarkdownAttributedVisitor: MarkupVisitor {
+    typealias Result = Void
+
+    let output = NSMutableAttributedString()
+    private(set) var outline: [MarkdownOutlineItem] = []
+
+    /// Inline formatting context (font/color/paragraph style) composes as we
+    /// descend into nested inline markup (e.g. `**bold _italic_**`); each
+    /// inline container pushes a derived copy and pops it back off once its
+    /// children have been visited.
+    private var attributeStack: [[NSAttributedString.Key: Any]] = []
+    private var listContextStack: [ListRenderContext] = []
+    private var quoteDepth = 0
+    private var linkDepth = 0
+
+    private struct ListRenderContext {
+        let isOrdered: Bool
+        var nextNumber: Int
+    }
+
+    private var currentAttributes: [NSAttributedString.Key: Any] {
+        attributeStack.last ?? MarkdownRenderer.bodyAttributes()
+    }
+
+    // MARK: - Fallback
+
+    /// `MarkupVisitor.visit(_:)`'s default protocol-extension implementation
+    /// is declared `mutating`, which would force every call site (including
+    /// internal recursive calls on `self`) to treat this reference type as
+    /// if it needed `var`-style mutation. Overriding it directly as a plain
+    /// instance method lets a `let`-bound visitor recurse through its own
+    /// reference without fighting Swift's mutating-witness dispatch.
+    func visit(_ markup: Markup) {
+        var this = self
+        markup.accept(&this)
+    }
+
+    func defaultVisit(_ markup: Markup) {
+        for child in markup.children {
+            visit(child)
+        }
+    }
+
+    // MARK: - Block elements
+
+    func visitParagraph(_ paragraph: Paragraph) {
+        let attributes = quoteDepth > 0
+            ? MarkdownRenderer.quoteAttributes(depth: quoteDepth)
+            : MarkdownRenderer.bodyAttributes()
+        appendInlineChildren(paragraph, attributes: attributes)
+        appendParagraphBreak(with: attributes)
+    }
+
+    func visitHeading(_ heading: Heading) {
+        let attributes = MarkdownRenderer.headingAttributes(level: heading.level)
+        let renderedLocation = output.length
+        appendInlineChildren(heading, attributes: attributes)
+
+        if heading.level <= 4 {
+            outline.append(
+                MarkdownOutlineItem(
+                    level: heading.level,
+                    title: MarkdownRenderer.plainDisplayText(of: heading),
+                    sourceLine: heading.range?.lowerBound.line ?? 0,
+                    renderedLocation: renderedLocation
+                )
+            )
+        }
+
+        appendParagraphBreak(with: attributes)
+    }
+
+    func visitBlockQuote(_ blockQuote: BlockQuote) {
+        quoteDepth += 1
+        for child in blockQuote.children {
+            visit(child)
+        }
+        quoteDepth -= 1
+    }
+
+    func visitCodeBlock(_ codeBlock: CodeBlock) {
+        var attributes = MarkdownRenderer.codeBlockAttributes()
+        if let language = codeBlock.language, !language.isEmpty {
+            attributes[MarkdownRenderer.codeLanguageAttributeKey] = language
+        }
+
+        var code = codeBlock.code
+        if code.hasSuffix("\n") {
+            code.removeLast()
+        }
+
+        MarkdownRenderer.append(code, to: output, attributes: attributes)
+        appendParagraphBreak(with: attributes)
+    }
+
+    func visitHTMLBlock(_ html: HTMLBlock) {
+        let attributes = MarkdownRenderer.codeBlockAttributes()
+        MarkdownRenderer.append(html.rawHTML, to: output, attributes: attributes)
+        appendParagraphBreak(with: attributes)
+    }
+
+    func visitThematicBreak(_ thematicBreak: ThematicBreak) {
+        let attributes = MarkdownRenderer.thematicBreakAttributes()
+        MarkdownRenderer.append("\u{00a0}", to: output, attributes: attributes)
+        appendParagraphBreak(with: attributes)
+    }
+
+    func visitOrderedList(_ orderedList: OrderedList) {
+        listContextStack.append(ListRenderContext(isOrdered: true, nextNumber: Int(orderedList.startIndex)))
+        for item in orderedList.listItems {
+            visitListItem(item)
+        }
+        listContextStack.removeLast()
+    }
+
+    func visitUnorderedList(_ unorderedList: UnorderedList) {
+        listContextStack.append(ListRenderContext(isOrdered: false, nextNumber: 0))
+        for item in unorderedList.listItems {
+            visitListItem(item)
+        }
+        listContextStack.removeLast()
+    }
+
+    func visitListItem(_ listItem: ListItem) {
+        guard let context = listContextStack.last else {
+            defaultVisit(listItem)
+            return
+        }
+
+        let depth = listContextStack.count - 1
+        let marker = listMarkerText(for: listItem, isOrdered: context.isOrdered)
+        let attributes = MarkdownRenderer.listAttributes(depth: depth)
+
+        var didAppendMarker = false
+        for child in listItem.children {
+            if !didAppendMarker {
+                MarkdownRenderer.append(marker, to: output, attributes: attributes)
+                didAppendMarker = true
+            }
+
+            if let paragraph = child as? Paragraph {
+                appendInlineChildren(paragraph, attributes: attributes)
+                appendParagraphBreak(with: attributes)
+            } else {
+                visit(child)
+            }
+        }
+
+        if !didAppendMarker {
+            MarkdownRenderer.append(marker, to: output, attributes: attributes)
+            appendParagraphBreak(with: attributes)
+        }
+    }
+
+    private func listMarkerText(for listItem: ListItem, isOrdered: Bool) -> String {
+        if let checkbox = listItem.checkbox {
+            return checkbox == .checked ? "\u{2611} " : "\u{2610} "
+        }
+
+        if isOrdered, !listContextStack.isEmpty {
+            let lastIndex = listContextStack.count - 1
+            let number = listContextStack[lastIndex].nextNumber
+            listContextStack[lastIndex].nextNumber += 1
+            return "\(number). "
+        }
+
+        return "\u{2022} "
+    }
+
+    func visitTable(_ table: Table) {
+        let columnCount = table.maxColumnCount
+        guard columnCount > 0 else { return }
+
+        var rows: [[Table.Cell]] = [Array(table.head.cells)]
+        for row in table.body.rows {
+            rows.append(Array(row.cells))
+        }
+
+        let rawAlignments = table.columnAlignments
+        let alignments: [Table.ColumnAlignment] = (0..<columnCount).map { index in
+            index < rawAlignments.count ? (rawAlignments[index] ?? .left) : .left
+        }
+
+        let textTable = NSTextTable()
+        textTable.numberOfColumns = columnCount
+        textTable.layoutAlgorithm = .automaticLayoutAlgorithm
+        textTable.collapsesBorders = true
+        textTable.hidesEmptyCells = false
+        textTable.setContentWidth(100, type: .percentageValueType)
+        textTable.setWidth(0, type: .absoluteValueType, for: .border)
+
+        let columnWidthPercentages = MarkdownRenderer.tableColumnWidthPercentages(rows: rows, columnCount: columnCount)
+
+        for (rowIndex, row) in rows.enumerated() {
+            let isHeader = rowIndex == 0
+            let isLastRow = rowIndex == rows.count - 1
+            let isZebraStripe = !isHeader && rowIndex % 2 == 0
+
+            for columnIndex in 0..<columnCount {
+                let cellBlock = MarkdownRenderer.tableCellBlock(
+                    table: textTable,
+                    rowIndex: rowIndex,
+                    columnIndex: columnIndex,
+                    widthPercentage: columnWidthPercentages[columnIndex],
+                    isHeader: isHeader,
+                    isZebraStripe: isZebraStripe
+                )
+                let paragraph = MarkdownRenderer.tableParagraphStyle(
+                    cellBlock: cellBlock,
+                    alignment: alignments[columnIndex],
+                    isFirstRow: isHeader,
+                    isLastRow: isLastRow
+                )
+                let attributes = MarkdownRenderer.tableCellAttributes(isHeader: isHeader, paragraphStyle: paragraph)
+
+                if columnIndex < row.count {
+                    appendInlineChildren(row[columnIndex], attributes: attributes)
+                }
+                MarkdownRenderer.append("\n", to: output, attributes: attributes)
+            }
+        }
+    }
+
+    // MARK: - Inline elements
+
+    func visitText(_ text: Text) {
+        guard linkDepth == 0 else {
+            MarkdownRenderer.append(text.string, to: output, attributes: currentAttributes)
+            return
+        }
+        appendAutolinkingText(text.string, attributes: currentAttributes)
+    }
+
+    func visitSoftBreak(_ softBreak: SoftBreak) {
+        MarkdownRenderer.append(" ", to: output, attributes: currentAttributes)
+    }
+
+    func visitLineBreak(_ lineBreak: LineBreak) {
+        MarkdownRenderer.append("\n", to: output, attributes: currentAttributes)
+    }
+
+    func visitInlineHTML(_ inlineHTML: InlineHTML) {
+        MarkdownRenderer.append(inlineHTML.rawHTML, to: output, attributes: currentAttributes)
+    }
+
+    func visitInlineCode(_ inlineCode: InlineCode) {
+        MarkdownRenderer.append(
+            inlineCode.code,
+            to: output,
+            attributes: MarkdownRenderer.inlineCodeAttributes(baseAttributes: currentAttributes)
+        )
+    }
+
+    func visitEmphasis(_ emphasis: Emphasis) {
+        pushDerivedAttributes { attributes in
+            attributes[.font] = MarkdownRenderer.italicFont(from: attributes[.font] as? NSFont)
+        }
+        for child in emphasis.inlineChildren {
+            visit(child)
+        }
+        popAttributes()
+    }
+
+    func visitStrong(_ strong: Strong) {
+        pushDerivedAttributes { attributes in
+            attributes[.font] = MarkdownRenderer.boldFont(from: attributes[.font] as? NSFont)
+        }
+        for child in strong.inlineChildren {
+            visit(child)
+        }
+        popAttributes()
+    }
+
+    func visitStrikethrough(_ strikethrough: Strikethrough) {
+        pushDerivedAttributes { attributes in
+            attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+        }
+        for child in strikethrough.inlineChildren {
+            visit(child)
+        }
+        popAttributes()
+    }
+
+    func visitLink(_ link: Link) {
+        guard let destination = link.destination, !destination.isEmpty else {
+            for child in link.inlineChildren {
+                visit(child)
+            }
+            return
+        }
+
+        pushDerivedAttributes { attributes in
+            attributes[.foregroundColor] = NSColor.linkColor
+            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            attributes[.link] = URL(string: destination) ?? destination
+        }
+        linkDepth += 1
+        for child in link.inlineChildren {
+            visit(child)
+        }
+        linkDepth -= 1
+        popAttributes()
+    }
+
+    func visitImage(_ image: Image) {
+        let altText = MarkdownRenderer.plainDisplayText(of: image)
+        let label = altText.isEmpty ? (image.source ?? "image") : altText
+
+        var attributes = currentAttributes
+        attributes[.foregroundColor] = NSColor.secondaryLabelColor
+        MarkdownRenderer.append("[\(label)]", to: output, attributes: attributes)
+    }
+
+    // MARK: - Shared helpers
+
+    private func appendInlineChildren<Container: InlineContainer>(
+        _ container: Container,
+        attributes: [NSAttributedString.Key: Any]
+    ) {
+        attributeStack.append(attributes)
+        for child in container.inlineChildren {
+            visit(child)
+        }
+        attributeStack.removeLast()
+    }
+
+    private func appendParagraphBreak(with attributes: [NSAttributedString.Key: Any]) {
+        MarkdownRenderer.append("\n", to: output, attributes: attributes)
+    }
+
+    private func pushDerivedAttributes(_ mutate: (inout [NSAttributedString.Key: Any]) -> Void) {
+        var attributes = currentAttributes
+        mutate(&attributes)
+        attributeStack.append(attributes)
+    }
+
+    private func popAttributes() {
+        attributeStack.removeLast()
+    }
+
+    /// Splits a plain-text run on bare http(s)/www/email spans (GFM's
+    /// autolink extension, which swift-markdown's parser doesn't attach) and
+    /// gives each detected span the same `.link` + underline + link-color
+    /// styling an explicit `[text](url)` link gets.
+    private func appendAutolinkingText(_ string: String, attributes: [NSAttributedString.Key: Any]) {
+        guard let detector = MarkdownRenderer.autolinkDetector, !string.isEmpty else {
+            MarkdownRenderer.append(string, to: output, attributes: attributes)
+            return
+        }
+
+        let nsString = string as NSString
+        let fullRange = NSRange(location: 0, length: nsString.length)
+        let matches = detector.matches(in: string, range: fullRange)
+
+        guard !matches.isEmpty else {
+            MarkdownRenderer.append(string, to: output, attributes: attributes)
+            return
+        }
+
+        var cursor = 0
+        for match in matches {
+            guard match.range.location >= cursor, match.range.length > 0 else { continue }
+
+            if match.range.location > cursor {
+                let plainRange = NSRange(location: cursor, length: match.range.location - cursor)
+                MarkdownRenderer.append(nsString.substring(with: plainRange), to: output, attributes: attributes)
+            }
+
+            let linkText = nsString.substring(with: match.range)
+            var linkAttributes = attributes
+            linkAttributes[.foregroundColor] = NSColor.linkColor
+            linkAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            if let url = match.url {
+                linkAttributes[.link] = url
+            } else {
+                linkAttributes[.link] = linkText
+            }
+            MarkdownRenderer.append(linkText, to: output, attributes: linkAttributes)
+
+            cursor = match.range.location + match.range.length
+        }
+
+        if cursor < nsString.length {
+            let remainderRange = NSRange(location: cursor, length: nsString.length - cursor)
+            MarkdownRenderer.append(nsString.substring(with: remainderRange), to: output, attributes: attributes)
+        }
     }
 }

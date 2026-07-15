@@ -1,0 +1,17 @@
+{
+  "name": "shiki-bundle",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build script vendoring shiki's fine-grained core + JS regex engine into a single-file bundle for Peeky's JSContext-based HighlightService.",
+  "type": "module",
+  "scripts": {
+    "build": "node ../build-shiki-bundle.mjs",
+    "smoke": "node smoke.mjs"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "esbuild": "0.28.1",
+    "jsonc-parser": "3.3.1",
+    "shiki": "4.3.1"
+  }
+}
