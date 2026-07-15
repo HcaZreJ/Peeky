@@ -254,6 +254,12 @@ private final class MarkdownOutlineItemView: NSControl {
     }
 }
 
+/// 作为 NSScrollView documentView 使用的纵向栈：翻转坐标系让内容顶部对齐、
+/// 初始视口停在最上（未翻转的 documentView 超出视口时停靠底部）。
+private final class FlippedStackView: NSStackView {
+    override var isFlipped: Bool { true }
+}
+
 final class PreviewWindowController: NSWindowController, NSWindowDelegate {
     var onOpenRequested: (() -> Void)?
     var onURLsDropped: (([URL]) -> Void)?
@@ -279,7 +285,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
     private let outlineHeaderStack = NSStackView()
     private let outlineHeaderLabel = NSTextField(labelWithString: "CONTENTS")
     private let outlineScrollView = NSScrollView()
-    private let outlineStack = NSStackView()
+    private let outlineStack = FlippedStackView()
     private let contentView = DropContainerView()
     private let headerView = DropHeaderView()
     private let titleLabel = NSTextField(labelWithString: "Peeky")
@@ -557,8 +563,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
             outlineScrollView.heightAnchor.constraint(lessThanOrEqualTo: sidebarView.heightAnchor, multiplier: 0.35)
         ])
 
+        // 优先级须低于 NSWindow 隐式"保持当前尺寸"(~500)：内容超过 35% 上限时
+        // 此等式断开、区高停在上限，而不是以更高优先级把窗口撑大。
         let outlineHuggingHeight = outlineScrollView.heightAnchor.constraint(equalTo: outlineStack.heightAnchor)
-        outlineHuggingHeight.priority = .defaultHigh
+        outlineHuggingHeight.priority = .defaultLow
         outlineHuggingHeight.isActive = true
     }
 
@@ -664,11 +672,13 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate {
         outlineScrollView.drawsBackground = false
         outlineScrollView.documentView = outlineStack
 
+        // documentView 只钉 top/leading/trailing，高度由条目内容自撑：内容超过
+        // 35% 上限时在 clip 内滚动。bottom 若与 clipView 钉成等式，大纲总高会经
+        // 35% 上限反推成侧栏/窗口的硬性最小高度，标题多的文档会把窗口撑出屏幕。
         NSLayoutConstraint.activate([
             outlineStack.topAnchor.constraint(equalTo: outlineScrollView.contentView.topAnchor),
             outlineStack.leadingAnchor.constraint(equalTo: outlineScrollView.contentView.leadingAnchor),
-            outlineStack.trailingAnchor.constraint(equalTo: outlineScrollView.contentView.trailingAnchor),
-            outlineStack.bottomAnchor.constraint(equalTo: outlineScrollView.contentView.bottomAnchor)
+            outlineStack.trailingAnchor.constraint(equalTo: outlineScrollView.contentView.trailingAnchor)
         ])
 
         outlineSectionStack.orientation = .vertical
