@@ -258,6 +258,66 @@ final class DropScrollView: NSScrollView {
     }
 }
 
+/// Renders a contiguous block-level background for Markdown fenced/indented/HTML
+/// code block lines instead of TextKit's stock per-glyph background fill.
+///
+/// `NSLayoutManager`'s default `fillBackgroundRectArray` fills only the rects it
+/// receives, which are sized to the actual glyph extent of the attributed run —
+/// flush against the paragraph's `headIndent`, so the background's left edge sits
+/// right at the first character with no visible padding. Every code-block line run
+/// is tagged with `MarkdownRenderer.codeBlockBackgroundAttributeKey`; when that
+/// marker is present this subclass fills the full `lineFragmentRect` width for each
+/// line fragment the range spans instead (contiguous, non-jagged), while the text
+/// itself stays inset by the paragraph's `headIndent`/`tailIndent` — producing
+/// visible left/right padding inside the block. Ranges without the marker (inline
+/// code, plain body text) fall through to `super`, so their fills are unaffected.
+final class CodeBlockBackgroundLayoutManager: NSLayoutManager {
+    private var currentBackgroundOrigin: NSPoint = .zero
+
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        currentBackgroundOrigin = origin
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+    }
+
+    override func fillBackgroundRectArray(
+        _ rectArray: UnsafePointer<NSRect>,
+        count rectCount: Int,
+        forCharacterRange charRange: NSRange,
+        color: NSColor
+    ) {
+        guard
+            charRange.location != NSNotFound,
+            charRange.length > 0,
+            let storage = textStorage,
+            charRange.location < storage.length,
+            storage.attribute(
+                MarkdownRenderer.codeBlockBackgroundAttributeKey,
+                at: charRange.location,
+                effectiveRange: nil
+            ) != nil
+        else {
+            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+            return
+        }
+
+        let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else {
+            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+            return
+        }
+
+        color.setFill()
+
+        var glyphIndex = glyphRange.location
+        while glyphIndex < NSMaxRange(glyphRange) {
+            var lineGlyphRange = NSRange()
+            let lineRect = lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineGlyphRange)
+            lineRect.offsetBy(dx: currentBackgroundOrigin.x, dy: currentBackgroundOrigin.y).fill()
+            glyphIndex = NSMaxRange(lineGlyphRange)
+        }
+    }
+}
+
 final class DropTextView: NSTextView {
     var onDropFiles: (([URL]) -> Void)?
     var onFileDragActiveChanged: ((Bool) -> Void)?
@@ -275,7 +335,7 @@ final class DropTextView: NSTextView {
         // 有内容却看不见字，能 ⌘A/⌘C 复制到文本）。显式构造 TextKit1 栈把管线钉死在
         // NSLayoutManager 侧。
         let storage = NSTextStorage()
-        let layoutManager = NSLayoutManager()
+        let layoutManager = CodeBlockBackgroundLayoutManager()
         let container = NSTextContainer(size: NSSize(
             width: 0,
             height: CGFloat.greatestFiniteMagnitude

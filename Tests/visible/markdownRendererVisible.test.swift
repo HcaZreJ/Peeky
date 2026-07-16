@@ -102,4 +102,41 @@ struct Visible_markdownRenderer {
         let expectedSecondLoc = try #require(location(of: "Installation", in: result.attributedText))
         #expect(secondLoc == expectedSecondLoc)
     }
+
+    // MARK: - U1 间距整改 + 代码块标记属性
+
+    @Test("consecutive body paragraphs have a combined visible gap of 16pt (previous paragraphSpacing + next paragraphSpacingBefore), not 32pt")
+    func test_markdownRenderer_paragraphSpacingNotDoubled() throws {
+        let text = MarkdownRenderer.render("Para A.\n\nPara B.")
+
+        let locA = try #require(location(of: "Para A.", in: text))
+        let locB = try #require(location(of: "Para B.", in: text))
+
+        let styleA = try #require(paragraphStyle(attributes(of: text, at: locA)))
+        let styleB = try #require(paragraphStyle(attributes(of: text, at: locB)))
+
+        #expect(abs(styleA.paragraphSpacingBefore - 0) < 0.01)
+        #expect(abs(styleB.paragraphSpacingBefore - 0) < 0.01)
+        #expect(abs((styleA.paragraphSpacing + styleB.paragraphSpacingBefore) - 16) < 0.01)
+    }
+
+    @Test("a multi-line fenced code block zeroes paragraphSpacing on interior lines, gives its last line 16pt of trailing spacing, and marks every code line with codeBlockBackgroundAttributeKey (absent from surrounding body text)")
+    func test_markdownRenderer_codeBlockSpacingAndBackgroundAttribute() throws {
+        let markdown = "```swift\nlet a = 1\nlet b = 2\nlet c = 3\n```\n\nTrailing paragraph."
+        let text = MarkdownRenderer.render(markdown)
+
+        let firstLoc = try #require(location(of: "let a = 1", in: text))
+        let lastLoc = try #require(location(of: "let c = 3", in: text))
+        let bodyLoc = try #require(location(of: "Trailing paragraph.", in: text))
+
+        let firstStyle = try #require(paragraphStyle(attributes(of: text, at: firstLoc)))
+        let lastStyle = try #require(paragraphStyle(attributes(of: text, at: lastLoc)))
+
+        #expect(abs(firstStyle.paragraphSpacing - 0) < 0.01)
+        #expect(abs(lastStyle.paragraphSpacing - 16) < 0.01)
+
+        #expect(attributes(of: text, at: firstLoc)[MarkdownRenderer.codeBlockBackgroundAttributeKey] != nil)
+        #expect(attributes(of: text, at: lastLoc)[MarkdownRenderer.codeBlockBackgroundAttributeKey] != nil)
+        #expect(attributes(of: text, at: bodyLoc)[MarkdownRenderer.codeBlockBackgroundAttributeKey] == nil)
+    }
 }

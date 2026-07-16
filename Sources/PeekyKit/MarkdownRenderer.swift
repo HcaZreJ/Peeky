@@ -20,6 +20,12 @@ enum MarkdownRenderer {
     /// without re-parsing the Markdown source.
     static let codeLanguageAttributeKey = NSAttributedString.Key("peeky.codeLanguage")
 
+    /// Marks every character run belonging to a fenced/indented/HTML code
+    /// block's *block-level* content (never inline code) so a later UI layer
+    /// can identify contiguous ranges that need line-fragment-wide block
+    /// background fill instead of per-glyph background fill.
+    static let codeBlockBackgroundAttributeKey = NSAttributedString.Key("peeky.codeBlockBackground")
+
     /// swift-markdown only attaches the `table`/`strikethrough`/`tasklist`
     /// cmark-gfm syntax extensions (see `CommonMarkConverter.swift`); GFM's
     /// bare-URL "autolink" extension is not wired up, so plain `Text` nodes
@@ -131,7 +137,13 @@ enum MarkdownRenderer {
     fileprivate static func bodyAttributes(indent: CGFloat = 0) -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineHeightMultiple = 1.5
-        paragraph.paragraphSpacingBefore = 16
+        // TextKit has no margin-collapse: the visible gap between two blocks
+        // is the sum of the preceding block's trailing `paragraphSpacing`
+        // and this block's own `paragraphSpacingBefore`. Every block in this
+        // file (headings excepted, see `headingAttributes`) keeps
+        // `paragraphSpacingBefore = 0` so the gap between two consecutive
+        // blocks is expressed exactly once (16pt), not doubled to 32pt.
+        paragraph.paragraphSpacingBefore = 0
         paragraph.paragraphSpacing = 16
         paragraph.headIndent = indent
         paragraph.firstLineHeadIndent = indent
@@ -155,10 +167,19 @@ enum MarkdownRenderer {
     fileprivate static func headingAttributes(level: Int) -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineHeightMultiple = 1.25
-        // Primer's markdown-body headings carry more space above than below
-        // (24pt vs 16pt) to visually group each heading with the content
-        // that follows it rather than the content above.
-        paragraph.paragraphSpacingBefore = 24
+        // Every other block in this file keeps `paragraphSpacingBefore = 0`
+        // so its visible top gap is expressed entirely by the preceding
+        // block's trailing `paragraphSpacing` (see `bodyAttributes`).
+        // Headings are the one exception that still carry a (smaller)
+        // leading value of their own, so a heading directly after body text
+        // reads with more space above it than below (16 body paragraphSpacing
+        // + 8 heading paragraphSpacingBefore = 24pt above vs. 16pt heading
+        // paragraphSpacing + 0 next-block paragraphSpacingBefore = 16pt
+        // below), matching Primer's "group with what follows" heading
+        // rhythm without reintroducing the double-counted 32pt gap a
+        // symmetric 16/16 split would produce between two ordinary body
+        // paragraphs.
+        paragraph.paragraphSpacingBefore = 8
         paragraph.paragraphSpacing = 16
 
         var attributes: [NSAttributedString.Key: Any] = [
@@ -182,7 +203,7 @@ enum MarkdownRenderer {
         let indent = CGFloat(max(depth, 1)) * 20
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineHeightMultiple = 1.5
-        paragraph.paragraphSpacingBefore = 16
+        paragraph.paragraphSpacingBefore = 0
         paragraph.paragraphSpacing = 16
         paragraph.headIndent = indent
         paragraph.firstLineHeadIndent = indent
@@ -198,7 +219,7 @@ enum MarkdownRenderer {
         let unit: CGFloat = 24
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineHeightMultiple = 1.5
-        paragraph.paragraphSpacingBefore = 4
+        paragraph.paragraphSpacingBefore = 0
         paragraph.paragraphSpacing = 4
         paragraph.headIndent = unit * CGFloat(depth + 1)
         paragraph.firstLineHeadIndent = unit * CGFloat(depth)
@@ -210,15 +231,21 @@ enum MarkdownRenderer {
         ]
     }
 
-    /// Fenced/indented code blocks are appended as a single multi-line run
-    /// sharing one `NSParagraphStyle`. Any nonzero `paragraphSpacing`/
-    /// `paragraphSpacingBefore` here would apply to *every* embedded source
-    /// line (each one is its own NSString paragraph), stacking up visible
-    /// gaps between every line of code. Vertical breathing room around the
-    /// block is instead delegated to the neighboring blocks' own
-    /// `paragraphSpacingBefore`/`paragraphSpacing` (body/heading/list/quote
-    /// all carry a nonzero value on both sides), so the gap is always
-    /// supplied by whichever adjacent block isn't a code block.
+    /// Fenced/indented/HTML code blocks are appended as a single multi-line
+    /// run sharing one `NSParagraphStyle` with `paragraphSpacing = 0`: every
+    /// embedded source line is its own NSString paragraph, so a nonzero
+    /// spacing here would stack up a visible gap between *every* line of
+    /// code. The block's own bottom margin is instead applied only to its
+    /// last logical line (see `MarkdownAttributedVisitor.appendCodeBlockContent`),
+    /// which gets a copy of this style with `paragraphSpacing` overridden to
+    /// 16pt; the block's top margin comes from whichever non-code block
+    /// precedes it, following this file's single-sided spacing model (only
+    /// a block's trailing `paragraphSpacing` expresses the gap to what
+    /// follows it; `paragraphSpacingBefore` is 0 everywhere except
+    /// headings). Every character run produced here also carries
+    /// `codeBlockBackgroundAttributeKey` so a later UI layer can render a
+    /// contiguous block-level background instead of relying on this
+    /// per-glyph `.backgroundColor`.
     fileprivate static func codeBlockAttributes() -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineHeightMultiple = 1.35
@@ -232,8 +259,22 @@ enum MarkdownRenderer {
             .font: NSFont.monospacedSystemFont(ofSize: 13.6, weight: .regular),
             .foregroundColor: NSColor.labelColor,
             .backgroundColor: codeBlockBackgroundColor(),
-            .paragraphStyle: paragraph
+            .paragraphStyle: paragraph,
+            codeBlockBackgroundAttributeKey: true
         ]
+    }
+
+    /// A copy of a code block's shared paragraph style with `paragraphSpacing`
+    /// overridden to 16pt, applied only to the block's last logical line so
+    /// the block contributes its bottom margin without any interior line
+    /// inheriting it.
+    fileprivate static func codeBlockTrailingSpacingParagraphStyle(
+        from attributes: [NSAttributedString.Key: Any]
+    ) -> NSParagraphStyle {
+        let style = (attributes[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle
+            ?? NSMutableParagraphStyle()
+        style.paragraphSpacing = 16
+        return style
     }
 
     fileprivate static func inlineCodeAttributes(baseAttributes: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
@@ -252,7 +293,7 @@ enum MarkdownRenderer {
 
     fileprivate static func thematicBreakAttributes() -> [NSAttributedString.Key: Any] {
         let paragraph = NSMutableParagraphStyle()
-        paragraph.paragraphSpacingBefore = 16
+        paragraph.paragraphSpacingBefore = 0
         paragraph.paragraphSpacing = 16
 
         return [
@@ -440,7 +481,13 @@ enum MarkdownRenderer {
     ) -> NSMutableParagraphStyle {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineHeightMultiple = 1.4
-        paragraph.paragraphSpacingBefore = isFirstRow ? 16 : 0
+        // The table's own top margin comes from the preceding block's
+        // trailing `paragraphSpacing` (single-sided spacing model, see
+        // `bodyAttributes`), so every row — including the header —
+        // keeps `paragraphSpacingBefore = 0`. `isFirstRow` is retained
+        // for call-site symmetry with `isLastRow`, which still drives the
+        // table's own bottom margin below.
+        paragraph.paragraphSpacingBefore = 0
         paragraph.paragraphSpacing = isLastRow ? 16 : 0
         paragraph.textBlocks = [cellBlock]
 
@@ -565,19 +612,12 @@ private final class MarkdownAttributedVisitor: MarkupVisitor {
             attributes[MarkdownRenderer.codeLanguageAttributeKey] = language
         }
 
-        var code = codeBlock.code
-        if code.hasSuffix("\n") {
-            code.removeLast()
-        }
-
-        MarkdownRenderer.append(code, to: output, attributes: attributes)
-        appendParagraphBreak(with: attributes)
+        appendCodeBlockContent(codeBlock.code, attributes: attributes)
     }
 
     func visitHTMLBlock(_ html: HTMLBlock) {
         let attributes = MarkdownRenderer.codeBlockAttributes()
-        MarkdownRenderer.append(html.rawHTML, to: output, attributes: attributes)
-        appendParagraphBreak(with: attributes)
+        appendCodeBlockContent(html.rawHTML, attributes: attributes)
     }
 
     func visitThematicBreak(_ thematicBreak: ThematicBreak) {
@@ -807,6 +847,46 @@ private final class MarkdownAttributedVisitor: MarkupVisitor {
 
     private func appendParagraphBreak(with attributes: [NSAttributedString.Key: Any]) {
         MarkdownRenderer.append("\n", to: output, attributes: attributes)
+    }
+
+    /// Appends a fenced/indented/HTML code block's raw content (which may
+    /// span multiple lines, each its own NSString paragraph under the shared
+    /// `paragraphSpacing = 0` style from `codeBlockAttributes()`) followed by
+    /// the block's terminating paragraph break, then overrides the paragraph
+    /// style on the block's *last logical line only* (the text after the
+    /// final embedded newline, plus the terminating break that was just
+    /// appended) with a copy whose `paragraphSpacing` is 16 — supplying the
+    /// block's bottom margin without any interior code line inheriting it.
+    /// A single-line block's one line is both first and last, so it still
+    /// ends up with `paragraphSpacing = 16`. All other attributes on that
+    /// range — including `codeBlockBackgroundAttributeKey` — are left
+    /// untouched.
+    private func appendCodeBlockContent(_ rawContent: String, attributes: [NSAttributedString.Key: Any]) {
+        var content = rawContent
+        if content.hasSuffix("\n") {
+            content.removeLast()
+        }
+
+        let startLocation = output.length
+        MarkdownRenderer.append(content, to: output, attributes: attributes)
+        appendParagraphBreak(with: attributes)
+        let endLocation = output.length
+
+        guard endLocation > startLocation else { return }
+
+        let nsContent = content as NSString
+        let lastNewlineRange = nsContent.range(
+            of: "\n",
+            options: .backwards,
+            range: NSRange(location: 0, length: nsContent.length)
+        )
+        let lastLineStart = lastNewlineRange.location == NSNotFound
+            ? startLocation
+            : startLocation + lastNewlineRange.location + lastNewlineRange.length
+
+        let lastLineRange = NSRange(location: lastLineStart, length: endLocation - lastLineStart)
+        let trailingStyle = MarkdownRenderer.codeBlockTrailingSpacingParagraphStyle(from: attributes)
+        output.addAttribute(.paragraphStyle, value: trailingStyle, range: lastLineRange)
     }
 
     /// 引用块左侧视觉标记：独立 `NSTextBlock` 挂在普通段落上会在 TextKit1 下把

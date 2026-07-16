@@ -1463,10 +1463,53 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private func scrollToOutlineItem(_ item: MarkdownOutlineItem) {
         if activeTab?.mode == .formatted, let renderedLocation = item.renderedLocation {
-            scrollToCharacterLocation(renderedLocation)
+            scrollToTopAligned(characterLocation: renderedLocation)
         } else {
-            scrollToLine(item.sourceLine)
+            let text = textView.string as NSString
+            guard text.length > 0 else { return }
+            let location = characterOffset(forLine: item.sourceLine, in: text)
+            scrollToTopAligned(characterLocation: location)
         }
+    }
+
+    /// 大纲点击专用置顶滚动：把目标字符位置所在逻辑行的首行滚到可视区顶部
+    /// （减去一个小固定偏移）。与 scrollToLine/scrollToCharacterLocation
+    /// （scheduleInitialScroll 的 path:line CLI 初始滚动等路径使用）完全独立——
+    /// 那些路径继续用 scrollRangeToVisible 的"最小可见"语义，不受此函数影响。
+    private func scrollToTopAligned(characterLocation location: Int) {
+        let text = textView.string as NSString
+        guard text.length > 0 else { return }
+
+        let safeLocation = min(max(location, 0), text.length)
+        let lineRange = text.lineRange(for: NSRange(location: safeLocation, length: 0))
+
+        guard
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer
+        else {
+            textView.setSelectedRange(lineRange)
+            textView.scrollRangeToVisible(lineRange)
+            gutterView.needsDisplay = true
+            return
+        }
+
+        layoutManager.ensureLayout(forCharacterRange: lineRange)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
+        let lineRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+
+        let topInset: CGFloat = 6
+        let targetY = lineRect.minY + textView.textContainerOrigin.y - topInset
+
+        let clipView = scrollView.contentView
+        let documentHeight = scrollView.documentView?.frame.height ?? textView.frame.height
+        let maxScrollableY = max(0, documentHeight - clipView.bounds.height)
+        let clampedY = min(max(targetY, 0), maxScrollableY)
+
+        clipView.scroll(to: NSPoint(x: 0, y: clampedY))
+        scrollView.reflectScrolledClipView(clipView)
+
+        textView.setSelectedRange(lineRange)
+        gutterView.needsDisplay = true
     }
 
     private func scrollToCharacterLocation(_ location: Int) {
