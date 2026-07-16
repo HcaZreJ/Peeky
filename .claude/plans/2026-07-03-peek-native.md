@@ -265,4 +265,4 @@ R4a ── R4b   │ │   │
 后续批次：W4b、W5——批次 1 验收后再拆 BACKLOG 送批。
 
 ## Status
-In Progress —— 批次 1（R0-R6b）已交付：全量 113 测试 + 三单元 hidden 满额 + 双审计员终审 FAIL 全修 + 出包管线验证通过；分支 worktree-rendering-overhaul（本地，未 push）。待用户实机视觉验收后关闭 issues #5-#9。后续批次 W4b/W5 细化后另拆 BACKLOG 送批。
+In Progress —— 批次 1（R0-R6b + 验收整改）已完成并合入 main（2026-07-16）：全量 113 测试、三单元 hidden 满额、双审计终审 FAIL 全修、用户实机复验通过 gutter/复制/JSON 树三域（issues #5-#7 已关闭）。用户复验遗留与新需求以 issues 管理：#8（Markdown 空行间距/code block 左 padding/大纲跳转置顶/表格场景复核）、#9（高亮主题浅暗统一/Python token 覆盖度）、#11（侧栏三区改 tabs）。后续批次 = 上述 issues + W4b/W5，细化后另拆 BACKLOG 送批。
