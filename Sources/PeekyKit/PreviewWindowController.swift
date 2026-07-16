@@ -323,10 +323,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// 各自独立起 Task）；invalidateHighlighting() 与 highlightTask 一并取消清空。
     private var codeBlockHighlightTasks: [Task<Void, Never>] = []
     private var sidebarWidthConstraint: NSLayoutConstraint?
-    /// scrollView.contentView（NSClipView）frameDidChange 观察 token；clip view 尺寸
-    /// 在实际布局落定后才变化（晚于 windowDidResize 一个 pass），借此重算限宽阅读列，
-    /// 覆盖初始 CLI 打开定型、拖拽拉宽/拉高三种场景。deinit/windowWillClose 释放。
-    nonisolated(unsafe) private var readingColumnResizeObserver: NSObjectProtocol?
     private var isFileTreeCollapsed = false
     /// 当前文件树的根目录；nil 表示尚未打开过任何文件/目录，树区未建立。
     private var treeRootURL: URL?
@@ -356,12 +352,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
-    }
-
-    deinit {
-        if let readingColumnResizeObserver {
-            NotificationCenter.default.removeObserver(readingColumnResizeObserver)
-        }
     }
 
     func open(url: URL) {
@@ -417,17 +407,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     func windowWillClose(_ notification: Notification) {
-        if let readingColumnResizeObserver {
-            NotificationCenter.default.removeObserver(readingColumnResizeObserver)
-            self.readingColumnResizeObserver = nil
-        }
         onClose?()
-    }
-
-    /// 窗口 resize（含拖拽 live resize 逐帧）实时重算限宽阅读列内边距（R4f）；
-    /// 非 markdown formatted 状态下该调用是零成本的 no-op（复位到默认全宽内边距）。
-    func windowDidResize(_ notification: Notification) {
-        applyMarkdownReadingColumn(isActive: isMarkdownReadingColumnActive)
     }
 
     private func setupUI() {
@@ -853,25 +833,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         scrollView.hasVerticalRuler = true
         scrollView.verticalRulerView = gutterView
         gutterView.connect(textView: textView, scrollView: scrollView)
-
-        // clip view frame 在实际布局落定后才更新（晚于 windowDidResize 一个 pass），
-        // 借 frameDidChange 在此刻重算限宽阅读列，读到的 contentSize 恒为当前值，
-        // 从而覆盖初始 CLI 打开定型（windowDidResize 未触发/读到偏小尺寸）与拖拽
-        // live resize 逐帧滞后两种场景（R4f 后续修正）。
-        scrollView.contentView.postsFrameChangedNotifications = true
-        readingColumnResizeObserver = NotificationCenter.default.addObserver(
-            forName: NSView.frameDidChangeNotification,
-            object: scrollView.contentView,
-            queue: .main
-        ) { [weak self] _ in
-            // NotificationCenter 以 queue: .main 投递，回调实际总在主线程运行；
-            // assumeIsolated 只是把这一事实告知编译器，消解 nonisolated 闭包签名
-            // 与 self（MainActor）之间的严格并发检查告警。
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.applyMarkdownReadingColumn(isActive: self.isMarkdownReadingColumnActive)
-            }
-        }
     }
 
     /// JSON/JSONL 默认视图：树。与 scrollView 同区域叠放，按 showJSONTree/showPlainText
@@ -1255,28 +1216,13 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         return document.kind == .markdown && tab.mode == .formatted
     }
 
-    /// 实现取舍：textView 保持既有 widthTracksTextView=true 全宽栈不变（折行/选中/
-    /// 复制/gutter 行号换算全部沿用现有管线，零改动），只动态调
-    /// textContainerInset.width 做左右对称内边距——AppKit 在 widthTracksTextView=true
-    /// 时按 (textView.frame.width − 2×textContainerInset.width) 换算实际排版宽度，
-    /// 折行天然按此列宽发生；字符定位（scrollToLine/scrollToOutlineItem 等）全程只用
-    /// NSRange 字符偏移，不含任何 x 坐标假设，故不受水平内边距变化影响。
-    /// 列宽 = min(42×16pt 正文字号≈672pt, 可用宽−2×24pt 最小边距)，居中；
-    /// 非 markdown / raw / 关闭折行时复位到既有默认 18pt 内边距（现状全宽行为）。
+    /// 正文填满窗口：markdown-formatted 用略宽于默认的对称内边距（32pt），其余模式
+    /// 用默认 18pt。textView 走 widthTracksTextView=true + autoresizingMask [.width]，
+    /// 实际排版宽 = frame 宽 − 2×inset，正文随窗口变宽自动变宽；内边距为常量、不依赖
+    /// 当前宽度，故初始打开与拖拽 resize 都无需按宽度重算。字符定位（scrollToLine/
+    /// scrollToOutlineItem 等）全程只用 NSRange 偏移、不含 x 坐标假设，不受内边距影响。
     private func applyMarkdownReadingColumn(isActive: Bool) {
-        guard isActive else {
-            textView.textContainerInset = NSSize(width: 18, height: 16)
-            return
-        }
-
-        let columnMaxWidth: CGFloat = 42 * 16
-        let minMargin: CGFloat = 24
-        let availableWidth = scrollView.contentSize.width
-
-        let margin = availableWidth > columnMaxWidth
-            ? (availableWidth - columnMaxWidth) / 2
-            : min(minMargin, max(0, availableWidth / 2))
-
+        let margin: CGFloat = isActive ? 32 : 18
         textView.textContainerInset = NSSize(width: margin, height: 16)
     }
 

@@ -306,7 +306,7 @@ final class CodeBlockBackgroundLayoutManager: NSLayoutManager {
                 return
             }
 
-            color.setFill()
+            resolvedBackgroundColor(color).setFill()
 
             var glyphIndex = glyphRange.location
             while glyphIndex < NSMaxRange(glyphRange) {
@@ -324,58 +324,70 @@ final class CodeBlockBackgroundLayoutManager: NSLayoutManager {
             effectiveRange: nil
         ) != nil {
             let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
-            guard glyphRange.length > 0 else {
+            guard
+                glyphRange.length > 0,
+                let container = textContainer(forGlyphAt: glyphRange.location, effectiveRange: nil)
+            else {
                 super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
                 return
             }
 
-            color.setFill()
+            resolvedBackgroundColor(color).setFill()
 
             let horizontalPadding: CGFloat = 4
             let verticalPadding: CGFloat = 1.5
             let fallbackFont = NSFont.monospacedSystemFont(ofSize: 13.6, weight: .regular)
 
-            var glyphIndex = glyphRange.location
-            while glyphIndex < NSMaxRange(glyphRange) {
-                var lineFragmentGlyphRange = NSRange()
-                let lineFragmentRect = self.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineFragmentGlyphRange)
-                let lineGlyphRange = NSIntersectionRange(glyphRange, lineFragmentGlyphRange)
+            // enumerateEnclosingRects 返回的是选区高亮用的字形紧致矩形——即便在
+            // NSTextTable 单元格内也贴着字形，而 boundingRect(forGlyphRange:in:)
+            // 在单元格里返回整行单元格宽（会把胶囊撑成一整条）。逐个紧致矩形按
+            // 该行 baseline + 字体度量收紧纵向、横向加内边距后画圆角胶囊。
+            enumerateEnclosingRects(
+                forGlyphRange: glyphRange,
+                withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                in: container
+            ) { [self] enclosingRect, _ in
+                let probe = CGPoint(x: enclosingRect.midX, y: enclosingRect.midY)
+                let glyphIndex = self.glyphIndex(for: probe, in: container)
+                let charIndex = characterIndexForGlyph(at: glyphIndex)
+                let font = (charIndex < storage.length
+                    ? storage.attribute(.font, at: charIndex, effectiveRange: nil) as? NSFont
+                    : nil) ?? fallbackFont
 
-                if lineGlyphRange.length > 0,
-                   let container = textContainer(forGlyphAt: lineGlyphRange.location, effectiveRange: nil) {
-                    let boundingRect = boundingRect(forGlyphRange: lineGlyphRange, in: container)
+                let lineRect = lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+                let baselineY = lineRect.minY + location(forGlyphAt: glyphIndex).y
 
-                    let lineCharIndex = characterIndexForGlyph(at: lineGlyphRange.location)
-                    let font = storage.attribute(
-                        .font,
-                        at: lineCharIndex,
-                        effectiveRange: nil
-                    ) as? NSFont ?? fallbackFont
+                let capsuleTop = baselineY - font.ascender - verticalPadding
+                let capsuleHeight = (font.ascender - font.descender) + 2 * verticalPadding
+                let capsule = NSRect(
+                    x: enclosingRect.minX - horizontalPadding,
+                    y: capsuleTop,
+                    width: enclosingRect.width + 2 * horizontalPadding,
+                    height: capsuleHeight
+                ).offsetBy(dx: currentBackgroundOrigin.x, dy: currentBackgroundOrigin.y)
 
-                    let baselineOffset = location(forGlyphAt: lineGlyphRange.location).y
-                    let baselineY = lineFragmentRect.minY + baselineOffset
-
-                    let capsuleTop = baselineY - font.ascender - verticalPadding
-                    let capsuleHeight = (font.ascender - font.descender) + 2 * verticalPadding
-
-                    var rect = NSRect(
-                        x: boundingRect.minX - horizontalPadding,
-                        y: capsuleTop,
-                        width: boundingRect.width + 2 * horizontalPadding,
-                        height: capsuleHeight
-                    )
-                    rect = rect.offsetBy(dx: currentBackgroundOrigin.x, dy: currentBackgroundOrigin.y)
-
-                    let radius = min(5, rect.height / 2)
-                    NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
-                }
-
-                glyphIndex = NSMaxRange(lineFragmentGlyphRange)
+                let radius = min(5, capsule.height / 2)
+                NSBezierPath(roundedRect: capsule, xRadius: radius, yRadius: radius).fill()
             }
             return
         }
 
         super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+    }
+
+    /// 把（可能是动态外观的）背景色按 textView 当前 effectiveAppearance 解析为具体
+    /// sRGB 值再用于自绘填充。背景绘制回调里 NSAppearance.current 不保证是视图的
+    /// 外观，动态色会按默认（通常浅色）外观烘焙——暗色模式下把代码块/胶囊底色渲成
+    /// 近白。显式在视图外观下解析可消除该串色。
+    private func resolvedBackgroundColor(_ color: NSColor) -> NSColor {
+        guard let appearance = textContainers.first?.textView?.effectiveAppearance else {
+            return color
+        }
+        var resolved = color
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = color.usingColorSpace(.sRGB) ?? color
+        }
+        return resolved
     }
 }
 
