@@ -20,6 +20,9 @@ import Foundation
 final class JSONOutlineView: NSView {
     /// 子节点数超过该阈值时按此粒度分桶（Chrome DevTools 风格）。
     private static let bucketSize = 100
+    /// 首次装载默认展开阈值：节点总数超过此值时改为展开到第 2 层而非全展开，避免
+    /// 超大文档首次呈现就触发大规模物化。
+    private static let defaultExpansionNodeThreshold = 20_000
     /// 单元格值文本的物化上限（字符数）：避免某个值本身是几百 KB/MB 的字符串时，
     /// 仅为显示可视的几十个字符就物化 + 布局整段文本。真正的单行省略号截断仍由
     /// NSTextField 的 lineBreakMode 负责，这里只是给"物化多少字符"设一个安全上限。
@@ -199,6 +202,19 @@ final class JSONOutlineView: NSView {
             expandToDepth(rootItem(at: position), currentDepth: 1, maxDepth: level)
         }
         updatePathBar()
+    }
+
+    /// 首次装载默认展开：节点总数 ≤ defaultExpansionNodeThreshold 时全展开（分桶边界
+    /// 仍停，语义同 expandAll）；超过阈值时展开到第 2 层（语义同 collapseToLevel），
+    /// 避免超大文档首次呈现就触发大规模物化。仅供 tab 首次构建出索引时调用一次；
+    /// tab 切走再切回、复用已缓存索引的路径不应重复调用，否则会覆盖用户已手动
+    /// 调整的展开状态。
+    func applyDefaultExpansion() {
+        if treeIndex.nodes.count <= Self.defaultExpansionNodeThreshold {
+            expandAll()
+        } else {
+            collapseToLevel(2)
+        }
     }
 
     private func isExpandableItem(_ item: Item) -> Bool {
@@ -615,7 +631,7 @@ final class JSONOutlineView: NSView {
     private func rowText(for item: Item, isExpanded: Bool) -> NSAttributedString {
         switch item.content {
         case .bucket(_, let range):
-            return plain("[\(range.lowerBound)\u{2026}\(range.upperBound - 1)]", color: .tertiaryLabelColor)
+            return plain("[\(range.lowerBound)\u{2026}\(range.upperBound - 1)]", color: .secondaryLabelColor)
         case .node(let nodeIndex):
             guard treeIndex.nodes.indices.contains(nodeIndex) else {
                 return NSAttributedString(string: "")
@@ -640,13 +656,12 @@ final class JSONOutlineView: NSView {
     }
 
     private func validRowText(item: Item, nodeIndex: Int, node: JSONTreeIndex.Node, isExpanded: Bool) -> NSAttributedString {
-        let key = keyLabel(for: item, nodeIndex: nodeIndex)
         let result = NSMutableAttributedString()
 
         switch node.type {
         case .object, .array:
-            if let key, node.isTruncated || !isExpanded {
-                result.append(plain("\(key): ", color: .secondaryLabelColor))
+            if node.isTruncated || !isExpanded, let prefix = keyPrefix(for: item, nodeIndex: nodeIndex) {
+                result.append(prefix)
             }
             if node.isTruncated {
                 // 嵌套深度 >512 被截断的容器：childCount 归 0，不可展开
@@ -658,16 +673,20 @@ final class JSONOutlineView: NSView {
             } else if isExpanded {
                 // 展开后该行只显示 key（或索引）；子内容已由子行呈现。无 key 的根容器
                 // 退化显示裸括号，避免完全空白的行。
-                let label = key ?? (node.type == .object ? "{}" : "[]")
-                result.append(plain(label, color: .secondaryLabelColor))
+                if let label = keyLabelOnly(for: item, nodeIndex: nodeIndex) {
+                    result.append(label)
+                } else {
+                    let bracket = node.type == .object ? "{}" : "[]"
+                    result.append(plain(bracket, color: .secondaryLabelColor))
+                }
             } else {
                 let bracket = node.type == .object ? "{\u{2026}}" : "[\u{2026}]"
                 let unit = node.type == .object ? "keys" : "items"
-                result.append(plain("\(bracket) \(node.childCount) \(unit)", color: .tertiaryLabelColor))
+                result.append(plain("\(bracket) \(node.childCount) \(unit)", color: .secondaryLabelColor))
             }
         default:
-            if let key {
-                result.append(plain("\(key): ", color: .secondaryLabelColor))
+            if let prefix = keyPrefix(for: item, nodeIndex: nodeIndex) {
+                result.append(prefix)
             }
             let raw = sanitizeSingleLine(boundedRawValue(at: nodeIndex))
             result.append(plain(raw, color: valueColor(for: node.type)))
@@ -676,26 +695,38 @@ final class JSONOutlineView: NSView {
         return result
     }
 
-    private func keyLabel(for item: Item, nodeIndex: Int) -> String? {
+    /// object 成员真实 key（红色、带引号，引号内容按 escapeForBracket 转义避免破坏
+    /// 视觉引号配对）或数组元素/JSONL 记录展示序号（灰色、不带引号，结构/元信息
+    /// 范畴）；无 key 也无展示序号（如裸根节点）时返回 nil。
+    private func keyLabelOnly(for item: Item, nodeIndex: Int) -> NSAttributedString? {
         if let key = treeIndex.key(at: nodeIndex, in: sourceText) {
-            return key
+            return plain("\"\(escapeForBracket(key))\"", color: .systemRed)
         }
         if let displayIndex = item.displayIndex {
-            return String(displayIndex)
+            return plain("\(displayIndex)", color: .secondaryLabelColor)
         }
         return nil
     }
 
+    /// keyLabelOnly + 分隔符 " : "（灰色，结构/元信息范畴，与 key/索引本身的着色
+    /// 区分开）；无前缀时返回 nil。
+    private func keyPrefix(for item: Item, nodeIndex: Int) -> NSAttributedString? {
+        guard let label = keyLabelOnly(for: item, nodeIndex: nodeIndex) else { return nil }
+        let result = NSMutableAttributedString(attributedString: label)
+        result.append(plain(" : ", color: .secondaryLabelColor))
+        return result
+    }
+
+    /// JSONLint 风格五色：字符串绿、数字蓝、布尔与 null 紫；容器类型不经此函数
+    /// （object/array 走各自的容器摘要着色，invalid 走 invalidRowText 的红色）。
     private func valueColor(for type: JSONTreeIndex.NodeType) -> NSColor {
         switch type {
         case .string:
             return .systemGreen
         case .number:
-            return .systemMint
-        case .bool:
             return .systemBlue
-        case .null:
-            return .systemIndigo
+        case .bool, .null:
+            return .systemPurple
         case .object, .array, .invalid:
             return .labelColor
         }

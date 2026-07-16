@@ -161,27 +161,21 @@ enum MarkdownRenderer {
         paragraph.paragraphSpacingBefore = 24
         paragraph.paragraphSpacing = 16
 
-        if level <= 2 {
-            paragraph.textBlocks = [headingDividerBlock()]
-        }
-
-        return [
+        var attributes: [NSAttributedString.Key: Any] = [
             .font: boldFont(size: headingFontSize(level: level)),
             .foregroundColor: NSColor.labelColor,
             .paragraphStyle: paragraph
         ]
-    }
 
-    /// h1/h2 GitHub 观感的全宽底边线：挂在段落的 `NSTextBlock` 底（`.minY`）
-    /// border 上，而不是文字级 underline——文字级 underline 只沿标题字符本身的
-    /// glyph 宽度绘制，短标题下线会明显短于内容列宽；`NSTextBlock` 未绑定
-    /// `NSTextTable` 时按整个可用文本宽度布局，边框天然铺满内容列。
-    private static func headingDividerBlock() -> NSTextBlock {
-        let block = NSTextBlock()
-        block.setWidth(1, type: .absoluteValueType, for: .border, edge: .minY)
-        block.setBorderColor(NSColor.separatorColor, for: .minY)
-        block.setWidth(10, type: .absoluteValueType, for: .padding, edge: .minY)
-        return block
+        // h1/h2 GitHub 观感的底边线：文字级 underline（只沿标题字符本身的
+        // glyph 宽度绘制，短标题下线会短于内容列宽，但不会导致 TextKit1 下
+        // 独立 NSTextBlock 挂普通段落时的内容宽度塌缩/逐字竖排问题）。
+        if level <= 2 {
+            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            attributes[.underlineColor] = NSColor.separatorColor
+        }
+
+        return attributes
     }
 
     fileprivate static func quoteAttributes(depth: Int) -> [NSAttributedString.Key: Any] {
@@ -192,24 +186,12 @@ enum MarkdownRenderer {
         paragraph.paragraphSpacing = 16
         paragraph.headIndent = indent
         paragraph.firstLineHeadIndent = indent
-        paragraph.textBlocks = [quoteBarBlock()]
 
         return [
             .font: bodyFont(),
             .foregroundColor: NSColor.secondaryLabelColor,
             .paragraphStyle: paragraph
         ]
-    }
-
-    /// 引用块左侧色条：挂在段落的 `NSTextBlock` 左（`.minX`）border 上，色用
-    /// 次级色系（`secondaryLabelColor` 半透明），与引用文字既有的
-    /// `secondaryLabelColor` 前景色/`headIndent` 缩进语义并存，互不覆盖。
-    private static func quoteBarBlock() -> NSTextBlock {
-        let block = NSTextBlock()
-        block.setWidth(3.5, type: .absoluteValueType, for: .border, edge: .minX)
-        block.setBorderColor(NSColor.secondaryLabelColor.withAlphaComponent(0.5), for: .minX)
-        block.setWidth(12, type: .absoluteValueType, for: .padding, edge: .minX)
-        return block
     }
 
     fileprivate static func listAttributes(depth: Int) -> [NSAttributedString.Key: Any] {
@@ -541,6 +523,11 @@ private final class MarkdownAttributedVisitor: MarkupVisitor {
         let attributes = quoteDepth > 0
             ? MarkdownRenderer.quoteAttributes(depth: quoteDepth)
             : MarkdownRenderer.bodyAttributes()
+
+        if quoteDepth > 0 {
+            appendQuoteBarPrefix(with: attributes)
+        }
+
         appendInlineChildren(paragraph, attributes: attributes)
         appendParagraphBreak(with: attributes)
     }
@@ -820,6 +807,17 @@ private final class MarkdownAttributedVisitor: MarkupVisitor {
 
     private func appendParagraphBreak(with attributes: [NSAttributedString.Key: Any]) {
         MarkdownRenderer.append("\n", to: output, attributes: attributes)
+    }
+
+    /// 引用块左侧视觉标记：独立 `NSTextBlock` 挂在普通段落上会在 TextKit1 下把
+    /// 内容宽度塌缩成单字符宽（逐字竖排），故改为在引用段正文前插入按嵌套
+    /// 深度重复的 "▎ " 竖条字符，着 `tertiaryLabelColor`，与引用文字本身的
+    /// `secondaryLabelColor` 前景色/`headIndent` 缩进语义并存、互不覆盖。
+    private func appendQuoteBarPrefix(with attributes: [NSAttributedString.Key: Any]) {
+        var barAttributes = attributes
+        barAttributes[.foregroundColor] = NSColor.tertiaryLabelColor
+        let prefix = String(repeating: "\u{258E} ", count: quoteDepth)
+        MarkdownRenderer.append(prefix, to: output, attributes: barAttributes)
     }
 
     private func pushDerivedAttributes(_ mutate: (inout [NSAttributedString.Key: Any]) -> Void) {

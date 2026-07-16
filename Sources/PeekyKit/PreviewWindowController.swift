@@ -1165,9 +1165,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         jsonOutlineView.collapseToLevel(level)
     }
 
-    /// JSON/JSONL 默认视图 = 树：索引已缓存（tab 曾激活过）直接无闪切换；否则先保持
-    /// 原文文本视图可见，后台构建索引，就绪且该 tab 仍激活时才切到树，避免闪切换/
-    /// 切错 tab 的竞态。
+    /// JSON/JSONL 默认视图 = 树：索引已缓存（tab 曾激活过）直接无闪切换，沿用该 tab
+    /// 已有的展开状态，不重新应用默认展开；否则先保持原文文本视图可见，后台构建
+    /// 索引，就绪且该 tab 仍激活时才切到树，并仅在这个首次构建的分支里应用一次
+    /// 默认展开策略，避免闪切换/切错 tab 的竞态，也避免每次切回 tab 都强制重展。
     private func presentJSONTree(document: LoadedText, tabID: UUID) {
         guard let tabIndex = tabs.firstIndex(where: { $0.id == tabID }) else { return }
 
@@ -1188,6 +1189,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
                 self.tabs[currentTabIndex].jsonTreeIndex = builtIndex
                 guard self.activeTabID == tabID else { return }
                 self.showJSONTree(builtIndex)
+                self.jsonOutlineView.applyDefaultExpansion()
             }
         }
     }
