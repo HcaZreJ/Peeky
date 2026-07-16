@@ -26,6 +26,13 @@ enum MarkdownRenderer {
     /// background fill instead of per-glyph background fill.
     static let codeBlockBackgroundAttributeKey = NSAttributedString.Key("peeky.codeBlockBackground")
 
+    /// Marks every character run belonging to *inline* code (single-backtick
+    /// spans, never a fenced/indented/HTML block) so a later UI layer can
+    /// identify the exact glyph range that needs a tight capsule-shaped
+    /// background fill, as opposed to the block-level line-fragment-wide
+    /// fill driven by `codeBlockBackgroundAttributeKey`.
+    static let inlineCodeBackgroundAttributeKey = NSAttributedString.Key("peeky.inlineCodeBackground")
+
     /// swift-markdown only attaches the `table`/`strikethrough`/`tasklist`
     /// cmark-gfm syntax extensions (see `CommonMarkConverter.swift`); GFM's
     /// bare-URL "autolink" extension is not wired up, so plain `Text` nodes
@@ -281,7 +288,8 @@ enum MarkdownRenderer {
         var attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 13.6, weight: .regular),
             .foregroundColor: inlineCodeForegroundColor(),
-            .backgroundColor: inlineCodeBackgroundColor()
+            .backgroundColor: inlineCodeBackgroundColor(),
+            inlineCodeBackgroundAttributeKey: true
         ]
 
         if let paragraphStyle = baseAttributes[.paragraphStyle] {

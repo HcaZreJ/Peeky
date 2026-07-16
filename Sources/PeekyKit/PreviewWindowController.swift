@@ -323,6 +323,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// 各自独立起 Task）；invalidateHighlighting() 与 highlightTask 一并取消清空。
     private var codeBlockHighlightTasks: [Task<Void, Never>] = []
     private var sidebarWidthConstraint: NSLayoutConstraint?
+    /// scrollView.contentView（NSClipView）frameDidChange 观察 token；clip view 尺寸
+    /// 在实际布局落定后才变化（晚于 windowDidResize 一个 pass），借此重算限宽阅读列，
+    /// 覆盖初始 CLI 打开定型、拖拽拉宽/拉高三种场景。deinit/windowWillClose 释放。
+    nonisolated(unsafe) private var readingColumnResizeObserver: NSObjectProtocol?
     private var isFileTreeCollapsed = false
     /// 当前文件树的根目录；nil 表示尚未打开过任何文件/目录，树区未建立。
     private var treeRootURL: URL?
@@ -352,6 +356,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        if let readingColumnResizeObserver {
+            NotificationCenter.default.removeObserver(readingColumnResizeObserver)
+        }
     }
 
     func open(url: URL) {
@@ -407,6 +417,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     func windowWillClose(_ notification: Notification) {
+        if let readingColumnResizeObserver {
+            NotificationCenter.default.removeObserver(readingColumnResizeObserver)
+            self.readingColumnResizeObserver = nil
+        }
         onClose?()
     }
 
@@ -839,6 +853,25 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         scrollView.hasVerticalRuler = true
         scrollView.verticalRulerView = gutterView
         gutterView.connect(textView: textView, scrollView: scrollView)
+
+        // clip view frame 在实际布局落定后才更新（晚于 windowDidResize 一个 pass），
+        // 借 frameDidChange 在此刻重算限宽阅读列，读到的 contentSize 恒为当前值，
+        // 从而覆盖初始 CLI 打开定型（windowDidResize 未触发/读到偏小尺寸）与拖拽
+        // live resize 逐帧滞后两种场景（R4f 后续修正）。
+        scrollView.contentView.postsFrameChangedNotifications = true
+        readingColumnResizeObserver = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            // NotificationCenter 以 queue: .main 投递，回调实际总在主线程运行；
+            // assumeIsolated 只是把这一事实告知编译器，消解 nonisolated 闭包签名
+            // 与 self（MainActor）之间的严格并发检查告警。
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.applyMarkdownReadingColumn(isActive: self.isMarkdownReadingColumnActive)
+            }
+        }
     }
 
     /// JSON/JSONL 默认视图：树。与 scrollView 同区域叠放，按 showJSONTree/showPlainText

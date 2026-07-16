@@ -561,4 +561,39 @@ struct Hidden_markdownRenderer {
         let text = MarkdownRenderer.render(markdown)
         #expect(text.length == 0)
     }
+
+    // MARK: - V1 行内代码标记属性
+
+    @Test("inline code text carries inlineCodeBackgroundAttributeKey, distinct from the pre-existing codeBlockBackgroundAttributeKey")
+    func test_markdownRenderer_inlineCodeCarriesInlineBackgroundMarker() throws {
+        let text = MarkdownRenderer.render("Some `inlineCode` text.")
+        guard let loc = location(of: "inlineCode", in: text) else {
+            Issue.record("inline code text not found in rendered output")
+            return
+        }
+        let attrs = attributes(of: text, at: loc)
+        #expect(attrs[MarkdownRenderer.inlineCodeBackgroundAttributeKey] != nil)
+        // 行内代码原有的 .backgroundColor（非 nil）保持不变。
+        #expect(backgroundColor(attrs) != nil)
+    }
+
+    @Test("plain body text does not carry inlineCodeBackgroundAttributeKey")
+    func test_markdownRenderer_inlineMarkerAbsentOnBodyText() throws {
+        let text = MarkdownRenderer.render("A plain paragraph of body text.")
+        let attrs = attributes(of: text, at: 0)
+        #expect(attrs[MarkdownRenderer.inlineCodeBackgroundAttributeKey] == nil)
+    }
+
+    @Test("fenced code block content carries codeBlockBackgroundAttributeKey but not inlineCodeBackgroundAttributeKey — the two markers never cross over")
+    func test_markdownRenderer_inlineMarkerAbsentOnFencedCodeBlock() throws {
+        let markdown = "```swift\nlet x = 1\n```"
+        let text = MarkdownRenderer.render(markdown)
+        guard let loc = location(of: "let x = 1", in: text) else {
+            Issue.record("fenced code content not found in rendered output")
+            return
+        }
+        let attrs = attributes(of: text, at: loc)
+        #expect(attrs[MarkdownRenderer.codeBlockBackgroundAttributeKey] != nil)
+        #expect(attrs[MarkdownRenderer.inlineCodeBackgroundAttributeKey] == nil)
+    }
 }

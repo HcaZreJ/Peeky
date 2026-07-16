@@ -289,32 +289,93 @@ final class CodeBlockBackgroundLayoutManager: NSLayoutManager {
             charRange.location != NSNotFound,
             charRange.length > 0,
             let storage = textStorage,
-            charRange.location < storage.length,
-            storage.attribute(
-                MarkdownRenderer.codeBlockBackgroundAttributeKey,
-                at: charRange.location,
-                effectiveRange: nil
-            ) != nil
+            charRange.location < storage.length
         else {
             super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
             return
         }
 
-        let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
-        guard glyphRange.length > 0 else {
-            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+        if storage.attribute(
+            MarkdownRenderer.codeBlockBackgroundAttributeKey,
+            at: charRange.location,
+            effectiveRange: nil
+        ) != nil {
+            let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+            guard glyphRange.length > 0 else {
+                super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+                return
+            }
+
+            color.setFill()
+
+            var glyphIndex = glyphRange.location
+            while glyphIndex < NSMaxRange(glyphRange) {
+                var lineGlyphRange = NSRange()
+                let lineRect = lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineGlyphRange)
+                lineRect.offsetBy(dx: currentBackgroundOrigin.x, dy: currentBackgroundOrigin.y).fill()
+                glyphIndex = NSMaxRange(lineGlyphRange)
+            }
             return
         }
 
-        color.setFill()
+        if storage.attribute(
+            MarkdownRenderer.inlineCodeBackgroundAttributeKey,
+            at: charRange.location,
+            effectiveRange: nil
+        ) != nil {
+            let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+            guard glyphRange.length > 0 else {
+                super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+                return
+            }
 
-        var glyphIndex = glyphRange.location
-        while glyphIndex < NSMaxRange(glyphRange) {
-            var lineGlyphRange = NSRange()
-            let lineRect = lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineGlyphRange)
-            lineRect.offsetBy(dx: currentBackgroundOrigin.x, dy: currentBackgroundOrigin.y).fill()
-            glyphIndex = NSMaxRange(lineGlyphRange)
+            color.setFill()
+
+            let horizontalPadding: CGFloat = 4
+            let verticalPadding: CGFloat = 1.5
+            let fallbackFont = NSFont.monospacedSystemFont(ofSize: 13.6, weight: .regular)
+
+            var glyphIndex = glyphRange.location
+            while glyphIndex < NSMaxRange(glyphRange) {
+                var lineFragmentGlyphRange = NSRange()
+                let lineFragmentRect = self.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineFragmentGlyphRange)
+                let lineGlyphRange = NSIntersectionRange(glyphRange, lineFragmentGlyphRange)
+
+                if lineGlyphRange.length > 0,
+                   let container = textContainer(forGlyphAt: lineGlyphRange.location, effectiveRange: nil) {
+                    let boundingRect = boundingRect(forGlyphRange: lineGlyphRange, in: container)
+
+                    let lineCharIndex = characterIndexForGlyph(at: lineGlyphRange.location)
+                    let font = storage.attribute(
+                        .font,
+                        at: lineCharIndex,
+                        effectiveRange: nil
+                    ) as? NSFont ?? fallbackFont
+
+                    let baselineOffset = location(forGlyphAt: lineGlyphRange.location).y
+                    let baselineY = lineFragmentRect.minY + baselineOffset
+
+                    let capsuleTop = baselineY - font.ascender - verticalPadding
+                    let capsuleHeight = (font.ascender - font.descender) + 2 * verticalPadding
+
+                    var rect = NSRect(
+                        x: boundingRect.minX - horizontalPadding,
+                        y: capsuleTop,
+                        width: boundingRect.width + 2 * horizontalPadding,
+                        height: capsuleHeight
+                    )
+                    rect = rect.offsetBy(dx: currentBackgroundOrigin.x, dy: currentBackgroundOrigin.y)
+
+                    let radius = min(5, rect.height / 2)
+                    NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+                }
+
+                glyphIndex = NSMaxRange(lineFragmentGlyphRange)
+            }
+            return
         }
+
+        super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
     }
 }
 

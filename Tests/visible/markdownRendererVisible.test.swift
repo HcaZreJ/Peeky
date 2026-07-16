@@ -139,4 +139,17 @@ struct Visible_markdownRenderer {
         #expect(attributes(of: text, at: lastLoc)[MarkdownRenderer.codeBlockBackgroundAttributeKey] != nil)
         #expect(attributes(of: text, at: bodyLoc)[MarkdownRenderer.codeBlockBackgroundAttributeKey] == nil)
     }
+
+    // MARK: - V1 行内代码标记属性
+
+    @Test("inline code text carries inlineCodeBackgroundAttributeKey, while surrounding body text does not")
+    func test_markdownRenderer_inlineCodeCarriesInlineBackgroundMarker() throws {
+        let text = MarkdownRenderer.render("Some `inlineCode` text.")
+
+        let inlineLoc = try #require(location(of: "inlineCode", in: text))
+        let bodyLoc = try #require(location(of: "Some", in: text))
+
+        #expect(attributes(of: text, at: inlineLoc)[MarkdownRenderer.inlineCodeBackgroundAttributeKey] != nil)
+        #expect(attributes(of: text, at: bodyLoc)[MarkdownRenderer.inlineCodeBackgroundAttributeKey] == nil)
+    }
 }
