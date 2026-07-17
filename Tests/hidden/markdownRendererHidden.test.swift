@@ -169,6 +169,29 @@ struct Hidden_markdownRenderer {
         #expect(backgroundColor(attrs) != nil)
     }
 
+    @Test("inline code spans are set off from surrounding body text by thin-space separators outside the capsule")
+    func inlineCodeThinSpaceSeparators() throws {
+        let text = MarkdownRenderer.render("Some `inlineCode` text.")
+        let rendered = text.string as NSString
+
+        let codeRange = rendered.range(of: "inlineCode")
+        guard codeRange.location != NSNotFound else {
+            Issue.record("inline code text not found in rendered output")
+            return
+        }
+
+        let beforeLoc = codeRange.location - 1
+        let afterLoc = NSMaxRange(codeRange)
+        #expect(beforeLoc >= 0)
+        #expect(rendered.substring(with: NSRange(location: beforeLoc, length: 1)) == "\u{2009}")
+        #expect(afterLoc < rendered.length)
+        #expect(rendered.substring(with: NSRange(location: afterLoc, length: 1)) == "\u{2009}")
+
+        // 分隔符位于胶囊外：不携带 inline 底色标记，胶囊只包住 code 字符本身。
+        #expect(attributes(of: text, at: beforeLoc)[MarkdownRenderer.inlineCodeBackgroundAttributeKey] == nil)
+        #expect(attributes(of: text, at: afterLoc)[MarkdownRenderer.inlineCodeBackgroundAttributeKey] == nil)
+    }
+
     // MARK: - GFM 内联特性
 
     @Test("strikethrough text carries a non-zero strikethroughStyle attribute")
@@ -300,6 +323,22 @@ struct Hidden_markdownRenderer {
 
         #expect(topStyle.headIndent > 0)
         #expect(nestedStyle.headIndent > topStyle.headIndent)
+    }
+
+    @Test(
+        "top-level list markers indent from the leading margin so lists stand off from body text",
+        arguments: ["- Item one", "1. Item one"]
+    )
+    func topLevelListLeadingIndent(_ markdown: String) throws {
+        let text = MarkdownRenderer.render(markdown)
+
+        guard let loc = location(of: "Item one", in: text) else {
+            Issue.record("list item text not found in rendered output")
+            return
+        }
+
+        let style = try #require(paragraphStyle(attributes(of: text, at: loc)))
+        #expect(style.firstLineHeadIndent > 0)
     }
 
     // MARK: - 大纲

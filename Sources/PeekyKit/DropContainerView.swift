@@ -347,7 +347,7 @@ final class CodeBlockBackgroundLayoutManager: NSLayoutManager {
             // （横向贴字形、纵向为整行行高），单元格内外都正确；据此逐个把纵向收紧到
             // 贴文字高度、横向加内边距后画圆角胶囊。
             for i in 0..<rectCount {
-                let glyphRect = rectArray[i]
+                var glyphRect = rectArray[i]
                 let probe = CGPoint(
                     x: glyphRect.midX - currentBackgroundOrigin.x,
                     y: glyphRect.midY - currentBackgroundOrigin.y
@@ -360,6 +360,16 @@ final class CodeBlockBackgroundLayoutManager: NSLayoutManager {
 
                 let lineRect = lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
                 let baselineViewY = lineRect.minY + location(forGlyphAt: glyphIndex).y + currentBackgroundOrigin.y
+
+                // inline run 跨行换行时，TextKit 给非末行的矩形按选区语义延伸到
+                // 行尾（含行末空白）；把右缘钳到该行 usedRect（实际字形使用宽度），
+                // 胶囊只包住可见文字。行中不换行的矩形本就贴字形，钳制不生效。
+                let usedRect = lineFragmentUsedRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+                let usedMaxX = usedRect.maxX + currentBackgroundOrigin.x
+                if glyphRect.maxX > usedMaxX {
+                    glyphRect.size.width = usedMaxX - glyphRect.minX
+                }
+                guard glyphRect.width > 0 else { continue }
 
                 let capsuleTop = baselineViewY - font.ascender - verticalPadding
                 let capsuleHeight = (font.ascender - font.descender) + 2 * verticalPadding

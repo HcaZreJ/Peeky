@@ -224,12 +224,14 @@ enum MarkdownRenderer {
 
     fileprivate static func listAttributes(depth: Int) -> [NSAttributedString.Key: Any] {
         let unit: CGFloat = 24
+        // 顶层 marker 也从左缘内缩，让列表整体与正文段落在视觉上分层。
+        let leadingInset: CGFloat = 16
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineHeightMultiple = 1.5
         paragraph.paragraphSpacingBefore = 0
         paragraph.paragraphSpacing = 4
-        paragraph.headIndent = unit * CGFloat(depth + 1)
-        paragraph.firstLineHeadIndent = unit * CGFloat(depth)
+        paragraph.headIndent = leadingInset + unit * CGFloat(depth + 1)
+        paragraph.firstLineHeadIndent = leadingInset + unit * CGFloat(depth)
 
         return [
             .font: bodyFont(),
@@ -773,11 +775,16 @@ private final class MarkdownAttributedVisitor: MarkupVisitor {
     }
 
     func visitInlineCode(_ inlineCode: InlineCode) {
+        // 胶囊背景向字形外扩 4pt 内边距（CodeBlockBackgroundLayoutManager），
+        // 会吃掉与相邻正文之间的自然字距；用胶囊外的 thin space 分隔符
+        // （携带正文属性、不带 inline 标记）把胶囊与正文推开。
+        MarkdownRenderer.append("\u{2009}", to: output, attributes: currentAttributes)
         MarkdownRenderer.append(
             inlineCode.code,
             to: output,
             attributes: MarkdownRenderer.inlineCodeAttributes(baseAttributes: currentAttributes)
         )
+        MarkdownRenderer.append("\u{2009}", to: output, attributes: currentAttributes)
     }
 
     func visitEmphasis(_ emphasis: Emphasis) {
