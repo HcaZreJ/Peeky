@@ -258,6 +258,142 @@ final class DropScrollView: NSScrollView {
     }
 }
 
+/// Renders a contiguous block-level background for Markdown fenced/indented/HTML
+/// code block lines instead of TextKit's stock per-glyph background fill.
+///
+/// `NSLayoutManager`'s default `fillBackgroundRectArray` fills only the rects it
+/// receives, which are sized to the actual glyph extent of the attributed run —
+/// flush against the paragraph's `headIndent`, so the background's left edge sits
+/// right at the first character with no visible padding. Every code-block line run
+/// is tagged with `MarkdownRenderer.codeBlockBackgroundAttributeKey`; when that
+/// marker is present this subclass fills the full `lineFragmentRect` width for each
+/// line fragment the range spans instead (contiguous, non-jagged), while the text
+/// itself stays inset by the paragraph's `headIndent`/`tailIndent` — producing
+/// visible left/right padding inside the block. Ranges without the marker (inline
+/// code, plain body text) fall through to `super`, so their fills are unaffected.
+final class CodeBlockBackgroundLayoutManager: NSLayoutManager {
+    private var currentBackgroundOrigin: NSPoint = .zero
+
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        currentBackgroundOrigin = origin
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+    }
+
+    override func fillBackgroundRectArray(
+        _ rectArray: UnsafePointer<NSRect>,
+        count rectCount: Int,
+        forCharacterRange charRange: NSRange,
+        color: NSColor
+    ) {
+        guard
+            charRange.location != NSNotFound,
+            charRange.length > 0,
+            let storage = textStorage,
+            charRange.location < storage.length
+        else {
+            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+            return
+        }
+
+        if storage.attribute(
+            MarkdownRenderer.codeBlockBackgroundAttributeKey,
+            at: charRange.location,
+            effectiveRange: nil
+        ) != nil {
+            let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+            guard glyphRange.length > 0 else {
+                super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+                return
+            }
+
+            resolvedBackgroundColor(color).setFill()
+
+            var glyphIndex = glyphRange.location
+            while glyphIndex < NSMaxRange(glyphRange) {
+                var lineGlyphRange = NSRange()
+                let lineRect = lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineGlyphRange)
+                lineRect.offsetBy(dx: currentBackgroundOrigin.x, dy: currentBackgroundOrigin.y).fill()
+                glyphIndex = NSMaxRange(lineGlyphRange)
+            }
+            return
+        }
+
+        // 只处理 inline code 自身文字底色的填充：其 color 恒等于该处 .backgroundColor
+        // 属性值。NSTextTable 的单元格底色/边框也经本方法绘制（charRange 落在单元格
+        // 内容上、故 location 也带 inline 标记），但传入的是单元格底色/边框色而非 inline
+        // 底色——用颜色相等把它们放行给 super，避免把单元格边框画成整格胶囊。
+        let inlineBackground = storage.attribute(.backgroundColor, at: charRange.location, effectiveRange: nil) as? NSColor
+        if storage.attribute(
+            MarkdownRenderer.inlineCodeBackgroundAttributeKey,
+            at: charRange.location,
+            effectiveRange: nil
+        ) != nil, let inlineBackground, color.isEqual(inlineBackground) {
+            let glyphRange = self.glyphRange(forCharacterRange: charRange, actualCharacterRange: nil)
+            guard
+                glyphRange.length > 0,
+                let container = textContainer(forGlyphAt: glyphRange.location, effectiveRange: nil)
+            else {
+                super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+                return
+            }
+
+            resolvedBackgroundColor(color).setFill()
+
+            let horizontalPadding: CGFloat = 4
+            let verticalPadding: CGFloat = 1.5
+            let fallbackFont = NSFont.monospacedSystemFont(ofSize: 13.6, weight: .regular)
+
+            // 传入的 rectArray 是 TextKit 为该 .backgroundColor 段算好的字形紧致矩形
+            // （横向贴字形、纵向为整行行高），单元格内外都正确；据此逐个把纵向收紧到
+            // 贴文字高度、横向加内边距后画圆角胶囊。
+            for i in 0..<rectCount {
+                let glyphRect = rectArray[i]
+                let probe = CGPoint(
+                    x: glyphRect.midX - currentBackgroundOrigin.x,
+                    y: glyphRect.midY - currentBackgroundOrigin.y
+                )
+                let glyphIndex = self.glyphIndex(for: probe, in: container)
+                let charIndex = characterIndexForGlyph(at: glyphIndex)
+                let font = (charIndex < storage.length
+                    ? storage.attribute(.font, at: charIndex, effectiveRange: nil) as? NSFont
+                    : nil) ?? fallbackFont
+
+                let lineRect = lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+                let baselineViewY = lineRect.minY + location(forGlyphAt: glyphIndex).y + currentBackgroundOrigin.y
+
+                let capsuleTop = baselineViewY - font.ascender - verticalPadding
+                let capsuleHeight = (font.ascender - font.descender) + 2 * verticalPadding
+                let capsule = NSRect(
+                    x: glyphRect.minX - horizontalPadding,
+                    y: capsuleTop,
+                    width: glyphRect.width + 2 * horizontalPadding,
+                    height: capsuleHeight
+                )
+                let radius = min(5, capsule.height / 2)
+                NSBezierPath(roundedRect: capsule, xRadius: radius, yRadius: radius).fill()
+            }
+            return
+        }
+
+        super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+    }
+
+    /// 把（可能是动态外观的）背景色按 textView 当前 effectiveAppearance 解析为具体
+    /// sRGB 值再用于自绘填充。背景绘制回调里 NSAppearance.current 不保证是视图的
+    /// 外观，动态色会按默认（通常浅色）外观烘焙——暗色模式下把代码块/胶囊底色渲成
+    /// 近白。显式在视图外观下解析可消除该串色。
+    private func resolvedBackgroundColor(_ color: NSColor) -> NSColor {
+        guard let appearance = textContainers.first?.textView?.effectiveAppearance else {
+            return color
+        }
+        var resolved = color
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = color.usingColorSpace(.sRGB) ?? color
+        }
+        return resolved
+    }
+}
+
 final class DropTextView: NSTextView {
     var onDropFiles: (([URL]) -> Void)?
     var onFileDragActiveChanged: ((Bool) -> Void)?
@@ -275,7 +411,7 @@ final class DropTextView: NSTextView {
         // 有内容却看不见字，能 ⌘A/⌘C 复制到文本）。显式构造 TextKit1 栈把管线钉死在
         // NSLayoutManager 侧。
         let storage = NSTextStorage()
-        let layoutManager = NSLayoutManager()
+        let layoutManager = CodeBlockBackgroundLayoutManager()
         let container = NSTextContainer(size: NSSize(
             width: 0,
             height: CGFloat.greatestFiniteMagnitude

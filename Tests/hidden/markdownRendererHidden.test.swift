@@ -86,6 +86,9 @@ struct Hidden_markdownRenderer {
         let style = try #require(paragraphStyle(attrs))
         #expect(abs(style.lineHeightMultiple - 1.5) < 0.01)
         #expect(abs(style.paragraphSpacing - 16) < 0.01)
+        // U1: 块间距单侧化——正文段自身的 paragraphSpacingBefore 恒为 0，
+        // 间距全部由尾侧 paragraphSpacing 表达，避免与下一段的 spacingBefore 双计。
+        #expect(abs(style.paragraphSpacingBefore - 0) < 0.01)
     }
 
     // MARK: - 标题
@@ -107,14 +110,27 @@ struct Hidden_markdownRenderer {
         #expect(isBold(headingFont))
     }
 
-    @Test("heading paragraphSpacingBefore is positive and at least paragraphSpacing (asymmetric Primer rhythm)")
-    func headingSpacingBeforeExceedsAfter() throws {
-        let text = MarkdownRenderer.render("# A Heading")
-        let attrs = attributes(of: text, at: 0)
-        let style = try #require(paragraphStyle(attrs))
+    @Test("heading's visible spacing above (previous paragraph's paragraphSpacing + heading's paragraphSpacingBefore) exceeds its visible spacing below (heading's paragraphSpacing + next paragraph's paragraphSpacingBefore), under the single-sided no-double-count spacing model")
+    func test_markdownRenderer_headingVisibleSpacingExceedsAfter() throws {
+        let markdown = "Intro paragraph.\n\n# A Heading\n\nBody paragraph."
+        let text = MarkdownRenderer.render(markdown)
 
-        #expect(style.paragraphSpacingBefore > 0)
-        #expect(style.paragraphSpacingBefore >= style.paragraphSpacing)
+        guard let introLoc = location(of: "Intro paragraph.", in: text),
+              let headingLoc = location(of: "A Heading", in: text),
+              let bodyLoc = location(of: "Body paragraph.", in: text) else {
+            Issue.record("expected paragraphs/heading not found in rendered output")
+            return
+        }
+
+        let introStyle = try #require(paragraphStyle(attributes(of: text, at: introLoc)))
+        let headingStyle = try #require(paragraphStyle(attributes(of: text, at: headingLoc)))
+        let bodyStyle = try #require(paragraphStyle(attributes(of: text, at: bodyLoc)))
+
+        #expect(headingStyle.paragraphSpacingBefore > 0)
+
+        let visibleAbove = introStyle.paragraphSpacing + headingStyle.paragraphSpacingBefore
+        let visibleBelow = headingStyle.paragraphSpacing + bodyStyle.paragraphSpacingBefore
+        #expect(visibleAbove > visibleBelow)
     }
 
     // MARK: - 代码
@@ -411,5 +427,173 @@ struct Hidden_markdownRenderer {
     func whitespaceOnlyInputProducesEmptyOutline() throws {
         let result = MarkdownRenderer.renderWithOutline("\n\n   \n\t\n")
         #expect(result.outline.isEmpty)
+    }
+
+    // MARK: - U1 间距整改（块间距单侧化，消除双计）
+
+    @Test("consecutive body paragraphs have zero paragraphSpacingBefore and a combined visible gap of 16pt, not 32pt")
+    func test_markdownRenderer_paragraphSpacingNotDoubled() throws {
+        let text = MarkdownRenderer.render("Para A.\n\nPara B.")
+
+        guard let locA = location(of: "Para A.", in: text),
+              let locB = location(of: "Para B.", in: text) else {
+            Issue.record("paragraph text not found in rendered output")
+            return
+        }
+
+        let styleA = try #require(paragraphStyle(attributes(of: text, at: locA)))
+        let styleB = try #require(paragraphStyle(attributes(of: text, at: locB)))
+
+        #expect(abs(styleA.paragraphSpacingBefore - 0) < 0.01)
+        #expect(abs(styleB.paragraphSpacingBefore - 0) < 0.01)
+        #expect(abs((styleA.paragraphSpacing + styleB.paragraphSpacingBefore) - 16) < 0.01)
+    }
+
+    @Test("three consecutive body paragraphs all keep paragraphSpacingBefore at zero (no double-counted margins anywhere in a run)")
+    func test_markdownRenderer_multipleConsecutiveParagraphsEachHaveZeroSpacingBefore() throws {
+        let text = MarkdownRenderer.render("Para A.\n\nPara B.\n\nPara C.")
+
+        for label in ["Para A.", "Para B.", "Para C."] {
+            guard let loc = location(of: label, in: text) else {
+                Issue.record("\(label) not found in rendered output")
+                continue
+            }
+            let style = try #require(paragraphStyle(attributes(of: text, at: loc)))
+            #expect(abs(style.paragraphSpacingBefore - 0) < 0.01, "\(label) should have paragraphSpacingBefore == 0")
+        }
+    }
+
+    // MARK: - U1 代码块内部间距 + 标记属性
+
+    @Test("multi-line fenced code block keeps zero paragraphSpacing on interior lines and applies 16pt paragraphSpacing only to the final line")
+    func test_markdownRenderer_codeBlockInternalLinesZeroSpacingLastLineSixteen() throws {
+        let markdown = "```swift\nlet a = 1\nlet b = 2\nlet c = 3\n```\n\nTrailing paragraph."
+        let text = MarkdownRenderer.render(markdown)
+
+        guard let firstLoc = location(of: "let a = 1", in: text),
+              let middleLoc = location(of: "let b = 2", in: text),
+              let lastLoc = location(of: "let c = 3", in: text) else {
+            Issue.record("fenced code content not found in rendered output")
+            return
+        }
+
+        let firstStyle = try #require(paragraphStyle(attributes(of: text, at: firstLoc)))
+        let middleStyle = try #require(paragraphStyle(attributes(of: text, at: middleLoc)))
+        let lastStyle = try #require(paragraphStyle(attributes(of: text, at: lastLoc)))
+
+        #expect(abs(firstStyle.paragraphSpacing - 0) < 0.01)
+        #expect(abs(middleStyle.paragraphSpacing - 0) < 0.01)
+        #expect(abs(lastStyle.paragraphSpacing - 16) < 0.01)
+    }
+
+    @Test("a single-line fenced code block is both the first and last line of its block, so it carries the 16pt trailing paragraphSpacing")
+    func test_markdownRenderer_codeBlockSingleLineGetsSixteen() throws {
+        let markdown = "```swift\nlet only = 1\n```"
+        let text = MarkdownRenderer.render(markdown)
+
+        guard let loc = location(of: "let only = 1", in: text) else {
+            Issue.record("fenced code content not found in rendered output")
+            return
+        }
+
+        let style = try #require(paragraphStyle(attributes(of: text, at: loc)))
+        #expect(abs(style.paragraphSpacing - 16) < 0.01)
+    }
+
+    @Test("a fenced code block that opens the document renders without crashing, has no upper margin of its own, and still gives its final line the 16pt trailing spacing")
+    func test_markdownRenderer_codeBlockAsFirstDocumentBlockRendersWithoutCrash() throws {
+        let markdown = "```swift\nlet first = 1\n```"
+        let text = MarkdownRenderer.render(markdown)
+        #expect(text.length > 0)
+
+        guard let loc = location(of: "let first = 1", in: text) else {
+            Issue.record("fenced code content not found in rendered output")
+            return
+        }
+        let style = try #require(paragraphStyle(attributes(of: text, at: loc)))
+        #expect(abs(style.paragraphSpacingBefore - 0) < 0.01)
+        #expect(abs(style.paragraphSpacing - 16) < 0.01)
+    }
+
+    @Test("every line of a fenced code block carries the codeBlockBackgroundAttributeKey marker, including interior lines")
+    func test_markdownRenderer_codeBlockBackgroundAttributePresentOnEveryCodeLine() throws {
+        let markdown = "```swift\nlet a = 1\nlet b = 2\nlet c = 3\n```"
+        let text = MarkdownRenderer.render(markdown)
+
+        for content in ["let a = 1", "let b = 2", "let c = 3"] {
+            guard let loc = location(of: content, in: text) else {
+                Issue.record("\(content) not found in rendered output")
+                continue
+            }
+            let attrs = attributes(of: text, at: loc)
+            #expect(attrs[MarkdownRenderer.codeBlockBackgroundAttributeKey] != nil, "\(content) should carry codeBlockBackgroundAttributeKey")
+        }
+    }
+
+    @Test("plain body text does not carry the codeBlockBackgroundAttributeKey marker")
+    func test_markdownRenderer_codeBlockBackgroundAttributeAbsentOnBodyText() throws {
+        let text = MarkdownRenderer.render("A plain paragraph of body text.")
+        let attrs = attributes(of: text, at: 0)
+        #expect(attrs[MarkdownRenderer.codeBlockBackgroundAttributeKey] == nil)
+    }
+
+    @Test("inline code spans do not carry the codeBlockBackgroundAttributeKey marker (only fenced/indented/HTML code blocks do)")
+    func test_markdownRenderer_codeBlockBackgroundAttributeAbsentOnInlineCode() throws {
+        let text = MarkdownRenderer.render("Some `inlineCode` text.")
+        guard let loc = location(of: "inlineCode", in: text) else {
+            Issue.record("inline code text not found in rendered output")
+            return
+        }
+        let attrs = attributes(of: text, at: loc)
+        #expect(attrs[MarkdownRenderer.codeBlockBackgroundAttributeKey] == nil)
+    }
+
+    // MARK: - U1 鲁棒性
+
+    @Test(
+        "empty or whitespace-only input renders an empty attributed string without crashing",
+        arguments: [
+            "",
+            "\n\n   \n\t\n",
+        ]
+    )
+    func test_markdownRenderer_emptyOrWhitespaceInputProducesEmptyOutput(markdown: String) throws {
+        let text = MarkdownRenderer.render(markdown)
+        #expect(text.length == 0)
+    }
+
+    // MARK: - V1 行内代码标记属性
+
+    @Test("inline code text carries inlineCodeBackgroundAttributeKey, distinct from the pre-existing codeBlockBackgroundAttributeKey")
+    func test_markdownRenderer_inlineCodeCarriesInlineBackgroundMarker() throws {
+        let text = MarkdownRenderer.render("Some `inlineCode` text.")
+        guard let loc = location(of: "inlineCode", in: text) else {
+            Issue.record("inline code text not found in rendered output")
+            return
+        }
+        let attrs = attributes(of: text, at: loc)
+        #expect(attrs[MarkdownRenderer.inlineCodeBackgroundAttributeKey] != nil)
+        // 行内代码原有的 .backgroundColor（非 nil）保持不变。
+        #expect(backgroundColor(attrs) != nil)
+    }
+
+    @Test("plain body text does not carry inlineCodeBackgroundAttributeKey")
+    func test_markdownRenderer_inlineMarkerAbsentOnBodyText() throws {
+        let text = MarkdownRenderer.render("A plain paragraph of body text.")
+        let attrs = attributes(of: text, at: 0)
+        #expect(attrs[MarkdownRenderer.inlineCodeBackgroundAttributeKey] == nil)
+    }
+
+    @Test("fenced code block content carries codeBlockBackgroundAttributeKey but not inlineCodeBackgroundAttributeKey — the two markers never cross over")
+    func test_markdownRenderer_inlineMarkerAbsentOnFencedCodeBlock() throws {
+        let markdown = "```swift\nlet x = 1\n```"
+        let text = MarkdownRenderer.render(markdown)
+        guard let loc = location(of: "let x = 1", in: text) else {
+            Issue.record("fenced code content not found in rendered output")
+            return
+        }
+        let attrs = attributes(of: text, at: loc)
+        #expect(attrs[MarkdownRenderer.codeBlockBackgroundAttributeKey] != nil)
+        #expect(attrs[MarkdownRenderer.inlineCodeBackgroundAttributeKey] == nil)
     }
 }

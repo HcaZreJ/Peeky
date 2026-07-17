@@ -410,12 +410,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         onClose?()
     }
 
-    /// 窗口 resize（含拖拽 live resize 逐帧）实时重算限宽阅读列内边距（R4f）；
-    /// 非 markdown formatted 状态下该调用是零成本的 no-op（复位到默认全宽内边距）。
-    func windowDidResize(_ notification: Notification) {
-        applyMarkdownReadingColumn(isActive: isMarkdownReadingColumnActive)
-    }
-
     private func setupUI() {
         guard let window else { return }
 
@@ -1222,28 +1216,13 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         return document.kind == .markdown && tab.mode == .formatted
     }
 
-    /// 实现取舍：textView 保持既有 widthTracksTextView=true 全宽栈不变（折行/选中/
-    /// 复制/gutter 行号换算全部沿用现有管线，零改动），只动态调
-    /// textContainerInset.width 做左右对称内边距——AppKit 在 widthTracksTextView=true
-    /// 时按 (textView.frame.width − 2×textContainerInset.width) 换算实际排版宽度，
-    /// 折行天然按此列宽发生；字符定位（scrollToLine/scrollToOutlineItem 等）全程只用
-    /// NSRange 字符偏移，不含任何 x 坐标假设，故不受水平内边距变化影响。
-    /// 列宽 = min(42×16pt 正文字号≈672pt, 可用宽−2×24pt 最小边距)，居中；
-    /// 非 markdown / raw / 关闭折行时复位到既有默认 18pt 内边距（现状全宽行为）。
+    /// 正文填满窗口：markdown-formatted 用略宽于默认的对称内边距（32pt），其余模式
+    /// 用默认 18pt。textView 走 widthTracksTextView=true + autoresizingMask [.width]，
+    /// 实际排版宽 = frame 宽 − 2×inset，正文随窗口变宽自动变宽；内边距为常量、不依赖
+    /// 当前宽度，故初始打开与拖拽 resize 都无需按宽度重算。字符定位（scrollToLine/
+    /// scrollToOutlineItem 等）全程只用 NSRange 偏移、不含 x 坐标假设，不受内边距影响。
     private func applyMarkdownReadingColumn(isActive: Bool) {
-        guard isActive else {
-            textView.textContainerInset = NSSize(width: 18, height: 16)
-            return
-        }
-
-        let columnMaxWidth: CGFloat = 42 * 16
-        let minMargin: CGFloat = 24
-        let availableWidth = scrollView.contentSize.width
-
-        let margin = availableWidth > columnMaxWidth
-            ? (availableWidth - columnMaxWidth) / 2
-            : min(minMargin, max(0, availableWidth / 2))
-
+        let margin: CGFloat = isActive ? 32 : 18
         textView.textContainerInset = NSSize(width: margin, height: 16)
     }
 
@@ -1463,10 +1442,53 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private func scrollToOutlineItem(_ item: MarkdownOutlineItem) {
         if activeTab?.mode == .formatted, let renderedLocation = item.renderedLocation {
-            scrollToCharacterLocation(renderedLocation)
+            scrollToTopAligned(characterLocation: renderedLocation)
         } else {
-            scrollToLine(item.sourceLine)
+            let text = textView.string as NSString
+            guard text.length > 0 else { return }
+            let location = characterOffset(forLine: item.sourceLine, in: text)
+            scrollToTopAligned(characterLocation: location)
         }
+    }
+
+    /// 大纲点击专用置顶滚动：把目标字符位置所在逻辑行的首行滚到可视区顶部
+    /// （减去一个小固定偏移）。与 scrollToLine/scrollToCharacterLocation
+    /// （scheduleInitialScroll 的 path:line CLI 初始滚动等路径使用）完全独立——
+    /// 那些路径继续用 scrollRangeToVisible 的"最小可见"语义，不受此函数影响。
+    private func scrollToTopAligned(characterLocation location: Int) {
+        let text = textView.string as NSString
+        guard text.length > 0 else { return }
+
+        let safeLocation = min(max(location, 0), text.length)
+        let lineRange = text.lineRange(for: NSRange(location: safeLocation, length: 0))
+
+        guard
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer
+        else {
+            textView.setSelectedRange(lineRange)
+            textView.scrollRangeToVisible(lineRange)
+            gutterView.needsDisplay = true
+            return
+        }
+
+        layoutManager.ensureLayout(forCharacterRange: lineRange)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: lineRange, actualCharacterRange: nil)
+        let lineRect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+
+        let topInset: CGFloat = 6
+        let targetY = lineRect.minY + textView.textContainerOrigin.y - topInset
+
+        let clipView = scrollView.contentView
+        let documentHeight = scrollView.documentView?.frame.height ?? textView.frame.height
+        let maxScrollableY = max(0, documentHeight - clipView.bounds.height)
+        let clampedY = min(max(targetY, 0), maxScrollableY)
+
+        clipView.scroll(to: NSPoint(x: 0, y: clampedY))
+        scrollView.reflectScrolledClipView(clipView)
+
+        textView.setSelectedRange(lineRange)
+        gutterView.needsDisplay = true
     }
 
     private func scrollToCharacterLocation(_ location: Int) {
