@@ -64,6 +64,64 @@ private func linkValue(_ attrs: [NSAttributedString.Key: Any]) -> String? {
     return nil
 }
 
+private func underlineColor(_ attrs: [NSAttributedString.Key: Any]) -> NSColor? {
+    attrs[.underlineColor] as? NSColor
+}
+
+private func underlineStyleValue(_ attrs: [NSAttributedString.Key: Any]) -> Int {
+    if let intValue = attrs[.underlineStyle] as? Int { return intValue }
+    if let number = attrs[.underlineStyle] as? NSNumber { return number.intValue }
+    return 0
+}
+
+// MARK: - Color matching helpers (github-markdown-css targets, resolved per-appearance)
+//
+// 颜色目标为动态 NSColor（浅/深两套），必须在指定外观下 resolve 后逐通道比对，
+// 见 spec 提供的 `performAsCurrent` 取色模式。
+
+/// `"light"` -> `.aqua`，`"dark"` -> `.darkAqua`。用字符串标签而非直接把
+/// NSAppearance 塞进 `@Test(arguments:)`，规避 Swift 6 严格并发对非 Sendable
+/// 类型出现在参数化测试 arguments 里的顾虑。
+private func appearanceFor(_ name: String) -> NSAppearance {
+    NSAppearance(named: name == "dark" ? .darkAqua : .aqua)!
+}
+
+private func rgba(_ color: NSColor, in appearance: NSAppearance) -> (CGFloat, CGFloat, CGFloat, CGFloat) {
+    var result: (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+    appearance.performAsCurrentDrawingAppearance {
+        let converted = color.usingColorSpace(.sRGB) ?? color
+        result = (converted.redComponent, converted.greenComponent, converted.blueComponent, converted.alphaComponent)
+    }
+    return result
+}
+
+/// 解析 `RRGGBB` 或 `RRGGBBAA`（末两位=alpha）十六进制颜色目标为 0...1 分量。
+private func targetRGBA(hex: String) -> (CGFloat, CGFloat, CGFloat, CGFloat) {
+    var value: UInt64 = 0
+    Scanner(string: hex).scanHexInt64(&value)
+    let hasAlpha = hex.count == 8
+    let r = CGFloat((value >> (hasAlpha ? 24 : 16)) & 0xFF) / 255.0
+    let g = CGFloat((value >> (hasAlpha ? 16 : 8)) & 0xFF) / 255.0
+    let b = CGFloat((value >> (hasAlpha ? 8 : 0)) & 0xFF) / 255.0
+    let a = hasAlpha ? CGFloat(value & 0xFF) / 255.0 : 1.0
+    return (r, g, b, a)
+}
+
+private func expectColorMatches(
+    _ color: NSColor?,
+    hex: String,
+    appearanceName: String,
+    sourceLocation: SourceLocation = #_sourceLocation
+) throws {
+    let resolved = try #require(color, "expected a non-nil color to compare against #\(hex)", sourceLocation: sourceLocation)
+    let actual = rgba(resolved, in: appearanceFor(appearanceName))
+    let target = targetRGBA(hex: hex)
+    #expect(abs(actual.0 - target.0) < 0.01, "red channel mismatch for #\(hex) (\(appearanceName))", sourceLocation: sourceLocation)
+    #expect(abs(actual.1 - target.1) < 0.01, "green channel mismatch for #\(hex) (\(appearanceName))", sourceLocation: sourceLocation)
+    #expect(abs(actual.2 - target.2) < 0.01, "blue channel mismatch for #\(hex) (\(appearanceName))", sourceLocation: sourceLocation)
+    #expect(abs(actual.3 - target.3) < 0.01, "alpha channel mismatch for #\(hex) (\(appearanceName))", sourceLocation: sourceLocation)
+}
+
 @Suite("Hidden_markdownRenderer")
 struct Hidden_markdownRenderer {
 
@@ -644,5 +702,132 @@ struct Hidden_markdownRenderer {
         let attrs = attributes(of: text, at: loc)
         #expect(attrs[MarkdownRenderer.codeBlockBackgroundAttributeKey] != nil)
         #expect(attrs[MarkdownRenderer.inlineCodeBackgroundAttributeKey] == nil)
+    }
+
+    // MARK: - R2 颜色对齐 github-markdown-css
+
+    @Test(
+        "plain body text foreground color matches the GitHub Primer target in both light and dark appearance",
+        arguments: [
+            (appearanceName: "light", hex: "1f2328"),
+            (appearanceName: "dark", hex: "f0f6fc"),
+        ]
+    )
+    func test_markdownRenderer_bodyForegroundColorMatchesGithubTarget(_ testCase: (appearanceName: String, hex: String)) throws {
+        let text = MarkdownRenderer.render("Another plain body paragraph for color verification.")
+        let attrs = attributes(of: text, at: 0)
+        try expectColorMatches(foregroundColor(attrs), hex: testCase.hex, appearanceName: testCase.appearanceName)
+    }
+
+    @Test(
+        "explicit markdown link foreground color matches the GitHub Primer link target in both light and dark appearance",
+        arguments: [
+            (appearanceName: "light", hex: "0969da"),
+            (appearanceName: "dark", hex: "4493f8"),
+        ]
+    )
+    func test_markdownRenderer_linkForegroundColorMatchesGithubTarget(_ testCase: (appearanceName: String, hex: String)) throws {
+        let text = MarkdownRenderer.render("Read the [documentation](https://example.com/docs) for details.")
+        let loc = try #require(location(of: "documentation", in: text))
+        let attrs = attributes(of: text, at: loc)
+        try expectColorMatches(foregroundColor(attrs), hex: testCase.hex, appearanceName: testCase.appearanceName)
+    }
+
+    @Test(
+        "a paragraph mixing plain text and a link only colors the link run with the link target; surrounding text keeps the body target",
+        arguments: [
+            (appearanceName: "light", bodyHex: "1f2328", linkHex: "0969da"),
+            (appearanceName: "dark", bodyHex: "f0f6fc", linkHex: "4493f8"),
+        ]
+    )
+    func test_markdownRenderer_mixedParagraphColorsOnlyLinkRunAsLink(_ testCase: (appearanceName: String, bodyHex: String, linkHex: String)) throws {
+        let text = MarkdownRenderer.render("Please read the [guide](https://example.com/guide) before starting.")
+
+        let beforeLoc = try #require(location(of: "Please read the", in: text))
+        let linkLoc = try #require(location(of: "guide", in: text))
+        let afterLoc = try #require(location(of: "before starting.", in: text))
+
+        try expectColorMatches(foregroundColor(attributes(of: text, at: beforeLoc)), hex: testCase.bodyHex, appearanceName: testCase.appearanceName)
+        try expectColorMatches(foregroundColor(attributes(of: text, at: linkLoc)), hex: testCase.linkHex, appearanceName: testCase.appearanceName)
+        try expectColorMatches(foregroundColor(attributes(of: text, at: afterLoc)), hex: testCase.bodyHex, appearanceName: testCase.appearanceName)
+    }
+
+    @Test(
+        "blockquote text foreground color matches the GitHub Primer secondary text target in both light and dark appearance",
+        arguments: [
+            (appearanceName: "light", hex: "59636e"),
+            (appearanceName: "dark", hex: "9198a1"),
+        ]
+    )
+    func test_markdownRenderer_blockquoteForegroundColorMatchesGithubTarget(_ testCase: (appearanceName: String, hex: String)) throws {
+        let text = MarkdownRenderer.render("> A quoted remark.")
+        let loc = try #require(location(of: "quoted remark", in: text))
+        let attrs = attributes(of: text, at: loc)
+        try expectColorMatches(foregroundColor(attrs), hex: testCase.hex, appearanceName: testCase.appearanceName)
+    }
+
+    @Test(
+        "a nested (multi-level) blockquote still uses the GitHub Primer secondary text color target at its innermost level, in both appearances",
+        arguments: [
+            (appearanceName: "light", hex: "59636e"),
+            (appearanceName: "dark", hex: "9198a1"),
+        ]
+    )
+    func test_markdownRenderer_nestedBlockquoteForegroundColorMatchesGithubTarget(_ testCase: (appearanceName: String, hex: String)) throws {
+        let markdown = "> Outer quote\n> > Inner nested quote"
+        let text = MarkdownRenderer.render(markdown)
+        let loc = try #require(location(of: "Inner nested quote", in: text))
+        let attrs = attributes(of: text, at: loc)
+        try expectColorMatches(foregroundColor(attrs), hex: testCase.hex, appearanceName: testCase.appearanceName)
+    }
+
+    @Test(
+        "headings h1 through h6 render at their Primer-derived sizes (32/24/20/16/14/13.6) and all carry the bold trait",
+        arguments: [
+            (markdown: "# H1", expectedSize: CGFloat(32)),
+            (markdown: "## H2", expectedSize: CGFloat(24)),
+            (markdown: "### H3", expectedSize: CGFloat(20)),
+            (markdown: "#### H4", expectedSize: CGFloat(16)),
+            (markdown: "##### H5", expectedSize: CGFloat(14)),
+            (markdown: "###### H6", expectedSize: CGFloat(13.6)),
+        ]
+    )
+    func test_markdownRenderer_headingSizesFullMatrixH1ThroughH6(_ testCase: (markdown: String, expectedSize: CGFloat)) throws {
+        let text = MarkdownRenderer.render(testCase.markdown)
+        let attrs = attributes(of: text, at: 0)
+        let headingFont = try #require(font(attrs))
+        #expect(abs(headingFont.pointSize - testCase.expectedSize) < 0.01, "\(testCase.markdown) expected \(testCase.expectedSize)pt, got \(headingFont.pointSize)")
+        #expect(isBold(headingFont), "\(testCase.markdown) should carry the bold trait")
+    }
+
+    @Test(
+        "h1 and h2 headings carry a non-zero underlineStyle whose underlineColor matches the GitHub Primer border-bottom target, in both appearances",
+        arguments: [
+            (markdown: "# Heading One", appearanceName: "light", hex: "d1d9e0b3"),
+            (markdown: "# Heading One", appearanceName: "dark", hex: "3d444db3"),
+            (markdown: "## Heading Two", appearanceName: "light", hex: "d1d9e0b3"),
+            (markdown: "## Heading Two", appearanceName: "dark", hex: "3d444db3"),
+        ]
+    )
+    func test_markdownRenderer_headingUnderlineColorMatchesGithubTarget(_ testCase: (markdown: String, appearanceName: String, hex: String)) throws {
+        let text = MarkdownRenderer.render(testCase.markdown)
+        let attrs = attributes(of: text, at: 0)
+        #expect(underlineStyleValue(attrs) != 0, "\(testCase.markdown) should carry a non-zero underlineStyle")
+        try expectColorMatches(underlineColor(attrs), hex: testCase.hex, appearanceName: testCase.appearanceName)
+    }
+
+    @Test(
+        "headings h3 through h6 do not carry an underlineColor attribute (only h1 and h2 get the GitHub border-bottom treatment)",
+        arguments: [
+            "### Heading Three",
+            "#### Heading Four",
+            "##### Heading Five",
+            "###### Heading Six",
+        ]
+    )
+    func test_markdownRenderer_headingsH3ThroughH6HaveNoUnderlineColor(markdown: String) throws {
+        let text = MarkdownRenderer.render(markdown)
+        let attrs = attributes(of: text, at: 0)
+        #expect(underlineColor(attrs) == nil, "\(markdown) should not carry an underlineColor attribute")
     }
 }
