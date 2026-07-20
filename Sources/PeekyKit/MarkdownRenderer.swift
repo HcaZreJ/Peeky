@@ -222,16 +222,26 @@ enum MarkdownRenderer {
         ]
     }
 
+    /// 每级缩进 2em（32pt @ 16pt 字号）。marker 行的结构是
+    /// `\t<marker>\t<内容>`：第一个 tab 把 marker 右缘对齐到文本起点左侧
+    /// `markerGap` 处（数字位数不同也保持右对齐），第二个 tab 把首行内容
+    /// 推到 `headIndent`，与换行后的续行严格同列。几何对标 GitHub 渲染
+    /// （`ul/ol { padding-left: 2em }` + marker 悬挂在内容左侧）。
+    fileprivate static let listIndentUnit: CGFloat = 32
+    fileprivate static let listMarkerGap: CGFloat = 7
+
     fileprivate static func listAttributes(depth: Int) -> [NSAttributedString.Key: Any] {
-        let unit: CGFloat = 24
-        // 顶层 marker 也从左缘内缩，让列表整体与正文段落在视觉上分层。
-        let leadingInset: CGFloat = 16
+        let textStart = listIndentUnit * CGFloat(depth + 1)
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineHeightMultiple = 1.5
         paragraph.paragraphSpacingBefore = 0
         paragraph.paragraphSpacing = 4
-        paragraph.headIndent = leadingInset + unit * CGFloat(depth + 1)
-        paragraph.firstLineHeadIndent = leadingInset + unit * CGFloat(depth)
+        paragraph.headIndent = textStart
+        paragraph.firstLineHeadIndent = listIndentUnit * CGFloat(depth)
+        paragraph.tabStops = [
+            NSTextTab(textAlignment: .right, location: textStart - listMarkerGap),
+            NSTextTab(textAlignment: .left, location: textStart)
+        ]
 
         return [
             .font: bodyFont(),
@@ -659,13 +669,12 @@ private final class MarkdownAttributedVisitor: MarkupVisitor {
         }
 
         let depth = listContextStack.count - 1
-        let marker = listMarkerText(for: listItem, isOrdered: context.isOrdered)
         let attributes = MarkdownRenderer.listAttributes(depth: depth)
 
         var didAppendMarker = false
         for child in listItem.children {
             if !didAppendMarker {
-                MarkdownRenderer.append(marker, to: output, attributes: attributes)
+                appendListMarker(for: listItem, isOrdered: context.isOrdered, depth: depth, attributes: attributes)
                 didAppendMarker = true
             }
 
@@ -678,24 +687,43 @@ private final class MarkdownAttributedVisitor: MarkupVisitor {
         }
 
         if !didAppendMarker {
-            MarkdownRenderer.append(marker, to: output, attributes: attributes)
+            appendListMarker(for: listItem, isOrdered: context.isOrdered, depth: depth, attributes: attributes)
             appendParagraphBreak(with: attributes)
         }
     }
 
-    private func listMarkerText(for listItem: ListItem, isOrdered: Bool) -> String {
+    /// marker 行结构 `\t<marker>\t`（tab 语义见 `listAttributes`）。无序 marker
+    /// 按层级用 ●/○/■（对标浏览器 disc/circle/square），缩小字号 + 基线上移
+    /// 模拟 disc 的尺寸（约 5.6pt）与垂直居中，不撑高行；数字与 checkbox
+    /// 保持正文字号。
+    private func appendListMarker(
+        for listItem: ListItem,
+        isOrdered: Bool,
+        depth: Int,
+        attributes: [NSAttributedString.Key: Any]
+    ) {
+        var markerAttributes = attributes
+        let marker: String
         if let checkbox = listItem.checkbox {
-            return checkbox == .checked ? "\u{2611} " : "\u{2610} "
-        }
-
-        if isOrdered, !listContextStack.isEmpty {
+            marker = checkbox == .checked ? "\u{2611}" : "\u{2610}"
+        } else if isOrdered, !listContextStack.isEmpty {
             let lastIndex = listContextStack.count - 1
             let number = listContextStack[lastIndex].nextNumber
             listContextStack[lastIndex].nextNumber += 1
-            return "\(number). "
+            marker = "\(number)."
+        } else {
+            switch depth {
+            case 0: marker = "\u{25CF}"
+            case 1: marker = "\u{25CB}"
+            default: marker = "\u{25A0}"
+            }
+            markerAttributes[.font] = NSFont.systemFont(ofSize: 8)
+            markerAttributes[.baselineOffset] = 1.5
         }
 
-        return "\u{2022} "
+        MarkdownRenderer.append("\t", to: output, attributes: attributes)
+        MarkdownRenderer.append(marker, to: output, attributes: markerAttributes)
+        MarkdownRenderer.append("\t", to: output, attributes: attributes)
     }
 
     func visitTable(_ table: Table) {

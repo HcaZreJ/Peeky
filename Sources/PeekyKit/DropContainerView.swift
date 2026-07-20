@@ -393,7 +393,12 @@ final class CodeBlockBackgroundLayoutManager: NSLayoutManager {
     /// 外观，动态色会按默认（通常浅色）外观烘焙——暗色模式下把代码块/胶囊底色渲成
     /// 近白。显式在视图外观下解析可消除该串色。
     private func resolvedBackgroundColor(_ color: NSColor) -> NSColor {
-        guard let appearance = textContainers.first?.textView?.effectiveAppearance else {
+        // 本方法只在 drawBackground 的调用链内执行——TextKit1 的背景绘制
+        // 固定发生在主线程，读取 main-actor 隔离的 effectiveAppearance 安全；
+        // 该前提无法让本编译器版本静态采信（assumeIsolated 会对捕获 self 报
+        // sending 错误），经 KVC 读取，运行时语义与直接属性访问一致。
+        let textView = textContainers.first?.textView
+        guard let appearance = (textView as NSObject?)?.value(forKey: "effectiveAppearance") as? NSAppearance else {
             return color
         }
         var resolved = color

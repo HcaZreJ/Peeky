@@ -326,7 +326,7 @@ struct Hidden_markdownRenderer {
     }
 
     @Test(
-        "top-level list markers indent from the leading margin so lists stand off from body text",
+        "top-level list text starts 2em in, with the marker hanging on a right-aligned tab stop left of the text column",
         arguments: ["- Item one", "1. Item one"]
     )
     func topLevelListLeadingIndent(_ markdown: String) throws {
@@ -338,7 +338,17 @@ struct Hidden_markdownRenderer {
         }
 
         let style = try #require(paragraphStyle(attributes(of: text, at: loc)))
-        #expect(style.firstLineHeadIndent > 0)
+        #expect(style.headIndent >= 32)
+
+        // marker 行结构 \t<marker>\t：右对齐 tab 悬挂 marker、左对齐 tab
+        // 把首行文本推到 headIndent，与续行同列。
+        #expect(text.string.hasPrefix("\t"))
+        #expect(style.tabStops.count >= 2)
+        let markerStop = try #require(style.tabStops.first)
+        #expect(markerStop.alignment == .right)
+        #expect(markerStop.location > 0)
+        #expect(markerStop.location < style.headIndent)
+        #expect(style.tabStops[1].location == style.headIndent)
     }
 
     // MARK: - 大纲
