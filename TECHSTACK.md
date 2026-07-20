@@ -1,8 +1,8 @@
 # TECHSTACK
 
 ## 语言 / 运行时
-- **Swift 6.0**（swift-tools-version 6.0），macOS 13+，AppKit（无 SwiftUI、无 WebView）
-- 系统框架：`AppKit` / `Foundation` / `JavaScriptCore`（高亮引擎宿主）/ `os`（日志）
+- **Swift 6.0**（swift-tools-version 6.0），macOS 13+，AppKit + WebKit（markdown 预览用 WKWebView；无 SwiftUI）
+- 系统框架：`AppKit` / `WebKit`（markdown WebView 渲染）/ `Foundation` / `JavaScriptCore`（高亮引擎宿主）/ `os`（日志）
 - 构建仅需 **Xcode CommandLineTools**（纯 SwiftPM，无 Xcode 工程）；重新生成 shiki bundle 需 Node ≥22（仅构建期）
 
 ## 依赖
@@ -17,7 +17,8 @@ peeky/
 ├── Package.resolved                 # 锁定 swift-markdown 0.8.0
 ├── Sources/Peeky/                   # 入口 main.swift
 ├── Sources/PeekyKit/                # 全部实现（见 PROJECT.md 模块地图）
-│   └── Resources/shiki-bundle.js    # checked-in 高亮引擎产物（~755KB，SPM resource）
+│   ├── Resources/shiki-bundle.js    # checked-in 高亮引擎产物（~755KB，SPM resource）
+│   └── Resources/github-markdown.css # 内嵌 sindresorhus/github-markdown-css（markdown WebView 样式，SPM resource）
 ├── Tests/                           # PeekyTests：entry.swift + visible/ + hidden/
 ├── Resources/                       # Info.plist（peeky:// scheme + DocumentTypes）+ 图标
 ├── bin/peek                         # CLI（shell，零 Node）
@@ -31,7 +32,7 @@ peeky/
 ```
 
 ## 构建产物
-- `swift build -c release` → `.build/release/Peeky` + `.build/release/Peeky_PeekyKit.bundle`（SPM 资源包，内含 shiki-bundle.js）
+- `swift build -c release` → `.build/release/Peeky` + `.build/release/Peeky_PeekyKit.bundle`（SPM 资源包，内含 shiki-bundle.js + github-markdown.css）
 - `scripts/build-app.sh` → `.build/Peeky.app`（二进制 + Info.plist + icns + PeekyKit 资源包，ad-hoc codesign）
 - `HighlightService` 运行时寻径资源包：`.app` 的 `Contents/Resources/` 与 `swift build` 输出目录两个候选，找不到走纯文本降级（不崩溃）
 
