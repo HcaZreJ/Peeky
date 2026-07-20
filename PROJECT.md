@@ -10,7 +10,7 @@
 | `peeky://open?path=&line=&cwd=` scheme（行列跳转）/ CLI `path:line[:column]` 直开 | ✅ |
 | repo-aware 文件树侧栏（RepoRoot 发现 + DirectoryLister 惰性枚举） | ✅ |
 | `peek` CLI（bin/peek，build-app.sh --install 联动安装） | ✅ |
-| Markdown：swift-markdown 解析（GFM 全特性：表格/任务列表/删除线/自动链接/围栏代码块带高亮）+ Primer 排版数值 + 限宽阅读列（672pt 居中）+ 可点击大纲侧栏 | ✅ |
+| Markdown：swift-markdown 解析 → HTML（`MarkdownHTMLRenderer`），WKWebView + 内嵌真 github-markdown-css 渲染，GFM 全特性像素级对齐 github（表格/任务列表/嵌套引用/围栏代码块/标题底线等）+ 可点击大纲侧栏；选中复制走 WebView 原生；代码块语法高亮见 issue #16 | ✅ |
 | JSON/JSONL：pretty-print 缩进 + 语义分色（key/字符串/数字/bool/null/标点）+ 原生选中复制 ⌘C，可视区惰性上色（NSLayoutManager temporary attributes，只算屏幕可见行）扛几万行大文件，跟随系统 light/dark，坏行红标 | ✅ |
 | 源码语法高亮：JSC+Shiki，VSCode Dark Modern 原色，16 扩展名（py/ts/js/mjs/cjs/json/yaml/yml/toml/sh/bash/zsh/swift/ini/conf/config），流式分块上色 + 启动预热 + 超预算纯文本回退 | ✅ |
 | 行号 gutter（NSRulerView，viewport-only，折行仅首视觉行编号）+ 全文可选中 ⌘C | ✅ |
@@ -35,19 +35,20 @@
 ```
 main → AppDelegate → { OpenRequest, PreviewWindowController }
 PreviewWindowController(~1.8k 行，唯一有状态 UI 控制器)
-  → TextFileLoader / PreviewRenderer / PreviewDisplayMetadata / HighlightService
-  → PreviewGutterView(NSRulerView) / FileTreeView / Drop*View / FileKind / PeekyTheme / JSONHighlighter
-PreviewRenderer(纯编排) → MarkdownRenderer(swift-markdown visitor) / JSONFormatter
-                          / XMLFormatter / SyntaxHighlighter / FileKind
-叶子纯函数模块：JSONFormatter · JSONHighlighter · PeekyTheme · XMLFormatter · MarkdownRenderer
+  → TextFileLoader / PreviewRenderer / MarkdownHTMLRenderer / PreviewDisplayMetadata / HighlightService
+  → WKWebView(markdown 预览) / PreviewGutterView(NSRulerView) / FileTreeView / Drop*View / FileKind / PeekyTheme / JSONHighlighter
+MarkdownHTMLRenderer(markdown → HTML，走 WebView)；PreviewRenderer(纯编排，非 markdown)
+  → JSONFormatter / XMLFormatter / SyntaxHighlighter / MarkdownRenderer(大纲抽取 + >8MB raw 兜底) / FileKind
+叶子纯函数模块：JSONFormatter · JSONHighlighter · PeekyTheme · MarkdownHTMLRenderer · XMLFormatter · MarkdownRenderer
                · SyntaxHighlighter · RepoRoot · DirectoryLister
 服务单例：HighlightService（JSC + shiki-bundle，私有串行队列，故障永久降级不崩溃）
 ```
 
 ## 关键决策记录
-- 渲染主体走 `NSTextView` + `NSAttributedString`，无 WebView；JSON/JSONL = pretty-print 文本 + `JSONHighlighter` 可视区惰性语义分色 + 原生选中复制，唯一渲染形态（2026-07-20 用户裁定）。
+- 非 markdown 渲染走 `NSTextView` + `NSAttributedString`；markdown 预览走 `WKWebView` + 内嵌真 github-markdown-css（像素级对齐 github，选中复制走 WebView 原生）。
+- JSON/JSONL = pretty-print 文本 + `JSONHighlighter` 可视区惰性语义分色 + 原生选中复制，唯一渲染形态（2026-07-20 用户裁定）。
 - 配色集中于 `PeekyTheme`（light=GitHub Light / dark=VSC Dark Modern 两套语义 palette，换色只改 hex 常量），跟随系统 light/dark；当前接入 JSON/JSONL 渲染区 + gutter，全 app 主题统一（侧栏/源码/Markdown）为后续工程。
 - Markdown 解析层 = swiftlang/swift-markdown `exact 0.8.0`——本 repo 唯一获批第三方 SPM 依赖（2026-07-15 用户批准）。
-- 高亮引擎 = JSC+Shiki（dark_modern 主题 include 链拍平）：构建期 esbuild 产 `Sources/PeekyKit/Resources/shiki-bundle.js` checked-in，运行期零 Node、零 WebKit。
+- 高亮引擎 = JSC+Shiki（dark_modern 主题 include 链拍平）：构建期 esbuild 产 `Sources/PeekyKit/Resources/shiki-bundle.js` checked-in，运行期零 Node（高亮引擎本身不依赖 WebKit；markdown 预览另用 WKWebView）。
 - 编辑功能 wontfix（`.out-of-scope/file-editing.md`）；"看完顺手改"由 ⌘E 交系统默认编辑器承接。
 - CLI 命令名 `peek`（用户肌肉记忆），app/repo 名沿用 Peeky；基线取 `main` 分支。

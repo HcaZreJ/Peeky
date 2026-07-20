@@ -57,17 +57,8 @@ enum PreviewRenderer {
         document: LoadedText,
         mode: PreviewMode
     ) -> RenderedPreview {
-        if mode == .raw || !document.kind.hasFormattedPreview {
-            let raw = renderRaw(document)
-            if document.kind == .markdown {
-                return RenderedPreview(
-                    attributedText: raw.attributedText,
-                    note: raw.note,
-                    outline: MarkdownRenderer.outline(in: document.text),
-                    highlightLanguage: raw.highlightLanguage
-                )
-            }
-            return raw
+        if document.kind != .markdown && (mode == .raw || !document.kind.hasFormattedPreview) {
+            return renderRaw(document)
         }
 
         if document.readBytes > richFormatLimit && document.kind != .json && document.kind != .jsonl {

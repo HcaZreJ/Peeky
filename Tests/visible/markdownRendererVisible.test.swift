@@ -6,7 +6,7 @@ import AppKit
 // MARK: - Attribute helpers
 //
 // 小工具：从 NSAttributedString 的属性字典里取出 R2 spec 明确给出的断言目标
-// （字号/行高/段距/加粗），不涉及渲染器内部实现细节。
+// （字号/行高/段距/加粗/颜色），不涉及渲染器内部实现细节。
 
 private func attributes(of text: NSAttributedString, at location: Int) -> [NSAttributedString.Key: Any] {
     guard text.length > location, location >= 0 else { return [:] }
@@ -21,6 +21,20 @@ private func paragraphStyle(_ attrs: [NSAttributedString.Key: Any]) -> NSParagra
     attrs[.paragraphStyle] as? NSParagraphStyle
 }
 
+private func foregroundColor(_ attrs: [NSAttributedString.Key: Any]) -> NSColor? {
+    attrs[.foregroundColor] as? NSColor
+}
+
+private func underlineColor(_ attrs: [NSAttributedString.Key: Any]) -> NSColor? {
+    attrs[.underlineColor] as? NSColor
+}
+
+private func underlineStyleValue(_ attrs: [NSAttributedString.Key: Any]) -> Int {
+    if let intValue = attrs[.underlineStyle] as? Int { return intValue }
+    if let number = attrs[.underlineStyle] as? NSNumber { return number.intValue }
+    return 0
+}
+
 private func isBold(_ font: NSFont) -> Bool {
     font.fontDescriptor.symbolicTraits.contains(.bold)
 }
@@ -29,6 +43,54 @@ private func location(of substring: String, in text: NSAttributedString) -> Int?
     let ns = text.string as NSString
     let range = ns.range(of: substring)
     return range.location == NSNotFound ? nil : range.location
+}
+
+// MARK: - Color matching helpers (github-markdown-css targets, resolved per-appearance)
+//
+// 颜色目标为动态 NSColor（浅/深两套），必须在指定外观下 resolve 后逐通道比对，
+// 见 spec 提供的 `performAsCurrent` 取色模式。
+
+/// `"light"` -> `.aqua`，`"dark"` -> `.darkAqua`。用字符串标签而非直接把
+/// NSAppearance 塞进 `@Test(arguments:)`，规避 Swift 6 严格并发对非 Sendable
+/// 类型出现在参数化测试 arguments 里的顾虑。
+private func appearanceFor(_ name: String) -> NSAppearance {
+    NSAppearance(named: name == "dark" ? .darkAqua : .aqua)!
+}
+
+private func rgba(_ color: NSColor, in appearance: NSAppearance) -> (CGFloat, CGFloat, CGFloat, CGFloat) {
+    var result: (CGFloat, CGFloat, CGFloat, CGFloat) = (0, 0, 0, 0)
+    appearance.performAsCurrentDrawingAppearance {
+        let converted = color.usingColorSpace(.sRGB) ?? color
+        result = (converted.redComponent, converted.greenComponent, converted.blueComponent, converted.alphaComponent)
+    }
+    return result
+}
+
+/// 解析 `RRGGBB` 或 `RRGGBBAA`（末两位=alpha）十六进制颜色目标为 0...1 分量。
+private func targetRGBA(hex: String) -> (CGFloat, CGFloat, CGFloat, CGFloat) {
+    var value: UInt64 = 0
+    Scanner(string: hex).scanHexInt64(&value)
+    let hasAlpha = hex.count == 8
+    let r = CGFloat((value >> (hasAlpha ? 24 : 16)) & 0xFF) / 255.0
+    let g = CGFloat((value >> (hasAlpha ? 16 : 8)) & 0xFF) / 255.0
+    let b = CGFloat((value >> (hasAlpha ? 8 : 0)) & 0xFF) / 255.0
+    let a = hasAlpha ? CGFloat(value & 0xFF) / 255.0 : 1.0
+    return (r, g, b, a)
+}
+
+private func expectColorMatches(
+    _ color: NSColor?,
+    hex: String,
+    appearanceName: String,
+    sourceLocation: SourceLocation = #_sourceLocation
+) throws {
+    let resolved = try #require(color, "expected a non-nil color to compare against #\(hex)", sourceLocation: sourceLocation)
+    let actual = rgba(resolved, in: appearanceFor(appearanceName))
+    let target = targetRGBA(hex: hex)
+    #expect(abs(actual.0 - target.0) < 0.01, "red channel mismatch for #\(hex) (\(appearanceName))", sourceLocation: sourceLocation)
+    #expect(abs(actual.1 - target.1) < 0.01, "green channel mismatch for #\(hex) (\(appearanceName))", sourceLocation: sourceLocation)
+    #expect(abs(actual.2 - target.2) < 0.01, "blue channel mismatch for #\(hex) (\(appearanceName))", sourceLocation: sourceLocation)
+    #expect(abs(actual.3 - target.3) < 0.01, "alpha channel mismatch for #\(hex) (\(appearanceName))", sourceLocation: sourceLocation)
 }
 
 @Suite("Visible_markdownRenderer")
@@ -151,5 +213,44 @@ struct Visible_markdownRenderer {
 
         #expect(attributes(of: text, at: inlineLoc)[MarkdownRenderer.inlineCodeBackgroundAttributeKey] != nil)
         #expect(attributes(of: text, at: bodyLoc)[MarkdownRenderer.inlineCodeBackgroundAttributeKey] == nil)
+    }
+
+    // MARK: - R2 颜色对齐 github-markdown-css
+
+    @Test(
+        "plain body text foreground color matches the GitHub Primer target in both light and dark appearance",
+        arguments: [
+            (appearanceName: "light", hex: "1f2328"),
+            (appearanceName: "dark", hex: "f0f6fc"),
+        ]
+    )
+    func test_markdownRenderer_bodyForegroundColorMatchesGithubTarget(_ testCase: (appearanceName: String, hex: String)) throws {
+        let text = MarkdownRenderer.render("A plain paragraph of body text.")
+        let attrs = attributes(of: text, at: 0)
+        try expectColorMatches(foregroundColor(attrs), hex: testCase.hex, appearanceName: testCase.appearanceName)
+    }
+
+    @Test(
+        "explicit markdown link text foreground color matches the GitHub Primer link target in both light and dark appearance",
+        arguments: [
+            (appearanceName: "light", hex: "0969da"),
+            (appearanceName: "dark", hex: "4493f8"),
+        ]
+    )
+    func test_markdownRenderer_linkForegroundColorMatchesGithubTarget(_ testCase: (appearanceName: String, hex: String)) throws {
+        let text = MarkdownRenderer.render("[OpenAI](https://openai.com)")
+        let loc = try #require(location(of: "OpenAI", in: text))
+        let attrs = attributes(of: text, at: loc)
+        try expectColorMatches(foregroundColor(attrs), hex: testCase.hex, appearanceName: testCase.appearanceName)
+    }
+
+    @Test(
+        "h1/h2 headings carry the bottom-rule marker (GitHub border-bottom drawn as a full-width rule below the text), not a glyph underline",
+        arguments: ["# Heading One", "## Heading Two"]
+    )
+    func test_markdownRenderer_h1h2CarryBottomRuleMarker(_ markdown: String) throws {
+        let text = MarkdownRenderer.render(markdown)
+        let attrs = attributes(of: text, at: 0)
+        #expect(attrs[MarkdownRenderer.headingBottomRuleAttributeKey] as? Bool == true, "\(markdown) 应携带 headingBottomRuleAttributeKey")
     }
 }

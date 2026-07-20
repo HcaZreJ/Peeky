@@ -66,7 +66,7 @@ let package = Package(
                 .product(name: "Markdown", package: "swift-markdown")
             ],
             path: "Sources/PeekyKit",
-            resources: [.copy("Resources/shiki-bundle.js")],
+            resources: [.copy("Resources/shiki-bundle.js"), .copy("Resources/github-markdown.css")],
             // `PeekyTests` needs `@testable import PeekyKit` in every build
             // configuration: `swift build -c release` (no --product filter)
             // builds every target in the package, including PeekyTests, so

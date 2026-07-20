@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import WebKit
 
 private struct PreviewTab {
     let id: UUID
@@ -258,7 +259,7 @@ private final class FlippedStackView: NSStackView {
     override var isFlipped: Bool { true }
 }
 
-final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMenuDelegate {
+final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMenuDelegate, WKNavigationDelegate {
     var onOpenRequested: (() -> Void)?
     var onURLsDropped: (([URL]) -> Void)?
     var onClose: (() -> Void)?
@@ -305,6 +306,18 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let gutterView = PreviewGutterView()
     private let textView = DropTextView()
     private let emptyView = NSStackView()
+    /// markdown 专用渲染面：WKWebView + 真 github-markdown-css（像素级对齐 github）。
+    /// 与编辑器 scrollView 同区叠放，仅 markdown 显示。属性初始化即创建，
+    /// 让 WebContent 进程尽早预热，首次打开 markdown 近乎即时。
+    private let markdownWebView = WKWebView()
+    /// github-markdown.css 内容，首次访问时从资源包加载一次并缓存。
+    private lazy var githubMarkdownCSS = MarkdownHTMLRenderer.loadGithubMarkdownCSS()
+    /// 当前是否处于 markdown WebView 呈现态（决定大纲点击走 JS 滚动还是原生滚动）。
+    private var isMarkdownWebActive = false
+    /// 当前 markdown 的标题大纲（供 WebView 载入完成后按行定位到最近标题）。
+    private var currentMarkdownOutline: [MarkdownOutlineItem] = []
+    /// WebView 载入完成后要滚到的源行（peeky:// / 初始定位），载入完成即消费清空。
+    private var pendingMarkdownScrollLine: Int?
 
     private var tabs: [PreviewTab] = []
     private var activeTabID: UUID?
@@ -448,6 +461,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         rootView.addSubview(contentView)
         setupHeader()
         setupTextView()
+        setupMarkdownWebView()
         setupEmptyView()
 
         let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: 210)
@@ -478,6 +492,11 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+
+            markdownWebView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
+            markdownWebView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            markdownWebView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            markdownWebView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
             emptyView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             emptyView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor)
@@ -858,6 +877,15 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
+    /// markdown 专用 WebView：与编辑器 scrollView 同区叠放，仅 markdown 显示。
+    /// 不覆盖 appearance，让 github-markdown-css 的 prefers-color-scheme 随系统自动切浅深。
+    private func setupMarkdownWebView() {
+        markdownWebView.translatesAutoresizingMaskIntoConstraints = false
+        markdownWebView.isHidden = true
+        markdownWebView.navigationDelegate = self
+        contentView.addSubview(markdownWebView)
+    }
+
     private func setupEmptyView() {
         emptyView.orientation = .vertical
         emptyView.alignment = .centerX
@@ -961,10 +989,16 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         guard !outline.isEmpty else { return }
 
-        for item in outline {
+        for (index, item) in outline.enumerated() {
             let itemView = MarkdownOutlineItemView(item: item)
             itemView.onSelect = { [weak self] in
-                self?.scrollToOutlineItem(item)
+                guard let self else { return }
+                // WebView 呈现态走 JS 滚到对应 heading-N；原生（>8MB raw 兜底）走源行滚动。
+                if self.isMarkdownWebActive {
+                    self.markdownWebView.evaluateJavaScript("scrollToHeading(\(index))")
+                } else {
+                    self.scrollToOutlineItem(item)
+                }
             }
             outlineStack.addArrangedSubview(itemView)
             itemView.widthAnchor.constraint(equalTo: outlineStack.widthAnchor).isActive = true
@@ -1054,12 +1088,18 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         targetLine: Int?,
         tabID: UUID
     ) {
+        // markdown（≤8MB）走 WebView + 真 github-markdown-css；>8MB 落下方原生 raw 兜底。
+        if document.kind == .markdown && document.readBytes <= 8 * 1024 * 1024 {
+            renderMarkdownWeb(document: document, targetLine: targetLine)
+            return
+        }
+
         // JSON/JSONL 是唯一渲染形态（pretty-print 分色），不提供 Format/Raw 切换。
         let isJSONFamily = document.kind == .json || document.kind == .jsonl
         modeControl.isHidden = isJSONFamily
         modeControl.selectedSegment = mode.rawValue
         modeControl.isEnabled = document.kind.hasFormattedPreview
-        modeControl.setLabel(document.kind == .markdown ? "Preview" : "Format", forSegment: 0)
+        modeControl.setLabel("Format", forSegment: 0)
 
         let rendered = PreviewRenderer.render(
             document: document,
@@ -1141,7 +1181,66 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// 恒单 textView 视图：显示编辑器 scrollView（含 textView + 行号 gutter）。
     private func showPlainText() {
+        markdownWebView.isHidden = true
+        isMarkdownWebActive = false
         scrollView.isHidden = false
+    }
+
+    /// markdown WebView 呈现态：只显 WebView，隐编辑器 scrollView。
+    private func showMarkdownWeb() {
+        scrollView.isHidden = true
+        markdownWebView.isHidden = false
+    }
+
+    /// markdown（≤8MB）→ WKWebView + 真 github-markdown-css 呈现。构建 HTML、载入、
+    /// 重建大纲、填元信息；选中+复制由 WebView 原生自带。
+    private func renderMarkdownWeb(document: LoadedText, targetLine: Int?) {
+        isMarkdownWebActive = true
+        modeControl.isHidden = true
+
+        let rendered = MarkdownHTMLRenderer.renderWithOutline(document.text)
+        currentMarkdownOutline = rendered.outline
+        pendingMarkdownScrollLine = targetLine
+        let html = MarkdownHTMLRenderer.documentHTML(bodyHTML: rendered.html, css: githubMarkdownCSS)
+        markdownWebView.loadHTMLString(html, baseURL: nil)
+
+        rebuildMarkdownOutline(rendered.outline)
+
+        var summary = [
+            document.kind.displayName,
+            ByteCountFormatter.string(fromByteCount: document.totalBytes, countStyle: .file),
+            document.encodingName
+        ].joined(separator: "  |  ")
+        if document.isTruncated {
+            summary += "  |  Previewing first \(ByteCountFormatter.string(fromByteCount: Int64(document.readBytes), countStyle: .file))"
+        }
+        if let targetLine {
+            summary += "  |  Line \(targetLine)"
+        }
+        metaLabel.stringValue = summary
+        revealButton.isEnabled = true
+        copyButton.isEnabled = true
+
+        showPreviewState()
+        showMarkdownWeb()
+    }
+
+    /// WebView 载入完成：若有待定源行，滚到 sourceLine 不超过它的最后一个标题（就近定位）。
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard webView === markdownWebView, let line = pendingMarkdownScrollLine else { return }
+        pendingMarkdownScrollLine = nil
+
+        var targetIndex: Int?
+        for (index, item) in currentMarkdownOutline.enumerated() {
+            if item.sourceLine <= line {
+                targetIndex = index
+            } else {
+                break
+            }
+        }
+        if let targetIndex {
+            webView.evaluateJavaScript("scrollToHeading(\(targetIndex))")
+        }
     }
 
     private func applyDisplayMetadata(_ display: PreviewDisplayMetadata) {
@@ -1490,8 +1589,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
                 self.scrollToLine(targetLine)
             } else {
                 let topRange = NSRange(location: 0, length: 0)
-                self.textView.setSelectedRange(topRange)
                 self.textView.scrollRangeToVisible(topRange)
+                self.textView.showFindIndicator(for: topRange)
                 self.gutterView.needsDisplay = true
             }
         }
@@ -1504,8 +1603,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         let location = characterOffset(forLine: line, in: text)
         let lineRange = text.lineRange(for: NSRange(location: location, length: 0))
         textView.layoutManager?.ensureLayout(forCharacterRange: lineRange)
-        textView.setSelectedRange(lineRange)
         textView.scrollRangeToVisible(lineRange)
+        textView.showFindIndicator(for: lineRange)
         gutterView.needsDisplay = true
     }
 
@@ -1535,8 +1634,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             let layoutManager = textView.layoutManager,
             let textContainer = textView.textContainer
         else {
-            textView.setSelectedRange(lineRange)
             textView.scrollRangeToVisible(lineRange)
+            textView.showFindIndicator(for: lineRange)
             gutterView.needsDisplay = true
             return
         }
@@ -1556,7 +1655,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         clipView.scroll(to: NSPoint(x: 0, y: clampedY))
         scrollView.reflectScrolledClipView(clipView)
 
-        textView.setSelectedRange(lineRange)
+        textView.showFindIndicator(for: lineRange)
         gutterView.needsDisplay = true
     }
 
@@ -1567,8 +1666,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         let safeLocation = min(max(location, 0), text.length)
         let lineRange = text.lineRange(for: NSRange(location: safeLocation, length: 0))
         textView.layoutManager?.ensureLayout(forCharacterRange: lineRange)
-        textView.setSelectedRange(lineRange)
         textView.scrollRangeToVisible(lineRange)
+        textView.showFindIndicator(for: lineRange)
         gutterView.needsDisplay = true
     }
 
@@ -1599,6 +1698,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         titleLabel.stringValue = "Peeky"
         emptyView.isHidden = false
         scrollView.isHidden = true
+        markdownWebView.isHidden = true
+        isMarkdownWebActive = false
         modeControl.isEnabled = false
         revealButton.isEnabled = false
         copyButton.isEnabled = false
@@ -1736,6 +1837,16 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         copyAllItem.target = self
         copyMenu.addItem(copyAllItem)
 
+        // 无 keyEquivalent：纯 ⌘C 留给 NSTextView 原生 copy:（复制选区），
+        // 此菜单项只作为可发现入口，行为与原生 ⌘C 一致（含空选区回落全文）。
+        let copySelectionItem = NSMenuItem(
+            title: "Copy Selection",
+            action: #selector(copySelectionMenuAction(_:)),
+            keyEquivalent: ""
+        )
+        copySelectionItem.target = self
+        copyMenu.addItem(copySelectionItem)
+
         let copyAbsoluteItem = NSMenuItem(
             title: "Copy Absolute Path",
             action: #selector(copyAbsolutePathMenuAction(_:)),
@@ -1800,6 +1911,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         copyAllText()
     }
 
+    @objc private func copySelectionMenuAction(_ sender: Any?) {
+        copySelection()
+    }
+
     @objc private func copyAbsolutePathMenuAction(_ sender: Any?) {
         copyAbsolutePath()
     }
@@ -1825,6 +1940,22 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         guard let document = activeTab?.document else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(document.text, forType: .string)
+    }
+
+    /// 复制选中：选区非空复制选区文本，选区为空回落复制全文（copyAllText 同源语义）。
+    func copySelection() {
+        guard let document = activeTab?.document else { return }
+        let selectedRange = textView.selectedRange()
+        let selectedText = selectedRange.length > 0 ? (textView.string as NSString).substring(with: selectedRange) : ""
+        let payload = Self.selectionCopyPayload(selected: selectedText, full: document.text)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(payload, forType: .string)
+    }
+
+    /// 选区非空取选区，选区为空回落全文；纯函数、无 MainActor 状态，标 nonisolated
+    /// 便于任意上下文（含测试）同步调用，不依赖 NSTextView/NSPasteboard。
+    nonisolated static func selectionCopyPayload(selected: String, full: String) -> String {
+        selected.isEmpty ? full : selected
     }
 
     /// ② 复制绝对路径。
