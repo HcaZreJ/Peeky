@@ -12,7 +12,6 @@
 | `scripts/run-hidden-tests.sh <unit>` | 跑该单元 hidden 测试，仅输出 `PASSED: X/Y` |
 | `node scripts/build-shiki-bundle.mjs` | 重新生成 `Sources/PeekyKit/Resources/shiki-bundle.js`（幂等；改语言/主题后跑） |
 | `node scripts/shiki-bundle/smoke.mjs` | bundle 冒烟：3 语言 tokenize + dark_modern 色 + 分块续排断言 |
-| `bash scripts/spike-jsontree.sh` | 80MB JSON 索引性能/内存采样（生成样本 + swiftc -O + /usr/bin/time -l） |
 
 > 本机仅 CommandLineTools：`swift test` 会构建但**静默不执行**（CLT 缺 xctest 执行器）——一律用上表的 PeekyTests 可执行文件跑测试。
 
@@ -30,7 +29,7 @@
 - **任何 UI/渲染改动须在浅色与深色两种外观下各过一遍**（系统外观切换或 `defaults write -g AppleInterfaceStyle`）；颜色类改动另需两外观 resolve 亮度断言（背景/前景对比方向正确）
 - `swift run Peeky <md>` → 弹出即读，Markdown 大纲侧栏可点
 - 多标题 Markdown（≥40 个标题）→ 窗口高度不超出屏幕、上下可自由 resize，CONTENTS 大纲区在 35% 上限内自行滚动
-- `<json>` / `<jsonl>` → 默认树视图（分桶/折叠摘要/path bar/空格预览），树⇄原文切换，坏行红标；原文模式行号折行仅首行编号、往复滚动不漂移
+- `<json>` / `<jsonl>` → pretty-print 缩进 + 语义分色（key/串/数/bool/null/标点；浅色 GitHub Light、深色 VSC Dark Modern，跟随系统明暗），鼠标选中 ⌘C 复制，行号 gutter，JSONL 坏行红底红字 + gutter "!"；滚动时可视区即时上色、几万行不卡
 - `<py/ts/yaml…>` → Dark Modern 原色高亮，暗底统一，选中 ⌘C 可复制；⌘E 跳编辑器带行号
 - `.app` bundle 后 `open "peeky://open?path=...&line=N"` → 打开并定位到行
-- 大文件（>8MB）→ 降级 raw 不卡死
+- 大文件：非 JSON/JSONL（>8MB）降级 raw 不卡死；JSON/JSONL（含几万行 JSONL）仍 pretty-print + 可视区惰性上色，不卡死

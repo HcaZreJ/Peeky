@@ -414,6 +414,9 @@ final class DropTextView: NSTextView {
     var onFileDragActiveChanged: ((Bool) -> Void)?
     /// 每次 draw 后回调（gutter 的滚动/重排跟随信号，见 PreviewGutterView）。
     var onDidDraw: (() -> Void)?
+    /// effectiveAppearance 变更回调（系统明暗切换）：PreviewWindowController 据此
+    /// 对跟随系统外观的编辑器区（JSON/JSONL）即时重刷背景与全文基础前景。
+    var onEffectiveAppearanceChanged: (() -> Void)?
     var overlayConfiguration = PreviewTextOverlayConfiguration.hidden {
         didSet {
             needsDisplay = true
@@ -479,13 +482,13 @@ final class DropTextView: NSTextView {
         super.draw(dirtyRect)
         drawRecordSeparators()
         drawIndentGuides()
-        drawRecordAnnotations()
         onDidDraw?()
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         needsDisplay = true
+        onEffectiveAppearanceChanged?()
     }
 
     private func drawRecordSeparators() {
@@ -553,27 +556,6 @@ final class DropTextView: NSTextView {
 
         NSColor.separatorColor.withAlphaComponent(0.38).setStroke()
         path.stroke()
-    }
-
-    private func drawRecordAnnotations() {
-        guard !overlayConfiguration.recordAnnotations.isEmpty else { return }
-
-        for annotation in overlayConfiguration.recordAnnotations {
-            guard let rects = lineRects(forCharacterLocation: annotation.characterLocation) else { continue }
-
-            let font = NSFont.systemFont(ofSize: 11, weight: annotation.isWarning ? .semibold : .regular)
-            let color = annotation.isWarning ? NSColor.systemRed : NSColor.secondaryLabelColor
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: font,
-                .foregroundColor: color
-            ]
-            let size = annotation.text.size(withAttributes: attributes)
-            let x = rects.usedRect.maxX + 18
-            guard x + size.width + 12 < visibleRect.maxX else { continue }
-
-            let y = rects.lineRect.minY + max(0, (rects.lineRect.height - size.height) / 2)
-            annotation.text.draw(at: NSPoint(x: x, y: y), withAttributes: attributes)
-        }
     }
 
     private func lineRects(forCharacterLocation location: Int) -> (lineRect: NSRect, usedRect: NSRect)? {

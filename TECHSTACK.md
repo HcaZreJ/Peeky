@@ -25,7 +25,6 @@ peeky/
 ├── scripts/build-shiki-bundle.mjs   # esbuild 重新生成 shiki-bundle.js（幂等）
 ├── scripts/shiki-bundle/            # bundle 的 npm 工程（src 模板/vendor 主题/smoke.mjs）
 ├── scripts/run-hidden-tests.sh      # hidden 测试运行器（仅输出 PASSED: X/Y）
-├── scripts/spike-jsontree.sh        # 80MB JSON 索引性能/内存采样
 ├── .github/workflows/build-app.yml  # 手动触发的打包 workflow
 └── .claude/plans/                   # 跨 session 设计文档
 ```

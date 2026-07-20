@@ -7,13 +7,8 @@ private struct PreviewTab {
     var document: LoadedText?
     var errorMessage: String?
     var mode: PreviewMode
-    var collapseNestedJSON: Bool
     var targetLine: Int?
     var targetColumn: Int?
-    /// 后台构建好的 JSON/JSONL 树索引缓存；tab 重新激活时直接复用，不重新构建。
-    var jsonTreeIndex: JSONTreeIndex?
-    /// JSON/JSONL tab 的树/原文视图选择；per-tab 记录，切 tab 保持各自状态。
-    var jsonTreeVisible: Bool
 
     init(url: URL, document: LoadedText?, errorMessage: String?) {
         self.id = UUID()
@@ -21,10 +16,8 @@ private struct PreviewTab {
         self.document = document
         self.errorMessage = errorMessage
         self.mode = .formatted
-        self.collapseNestedJSON = false
         self.targetLine = nil
         self.targetColumn = nil
-        self.jsonTreeVisible = true
     }
 }
 
@@ -296,8 +289,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let titleLabel = NSTextField(labelWithString: "Peeky")
     private let metaLabel = NSTextField(labelWithString: "")
     private let modeControl = NSSegmentedControl(labels: ["Format", "Raw"], trackingMode: .selectOne, target: nil, action: nil)
-    private let jsonViewToggle = NSSegmentedControl(labels: ["Tree", "Text"], trackingMode: .selectOne, target: nil, action: nil)
-    private let foldButton = NSButton()
     private let wrapButton = NSButton()
     private let copyButton = NSButton()
     private let revealButton = NSButton()
@@ -307,12 +298,25 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let scrollView = DropScrollView()
     private let gutterView = PreviewGutterView()
     private let textView = DropTextView()
-    private let jsonOutlineView = JSONOutlineView()
     private let emptyView = NSStackView()
 
     private var tabs: [PreviewTab] = []
     private var activeTabID: UUID?
     private var wrapsLines = true
+    /// 最近一次渲染的编辑器区是否跟随系统明暗（JSON/JSONL）；系统外观切换时据此
+    /// 决定是否即时重刷编辑器背景与全文基础前景。
+    private var activeRenderFollowsSystemAppearance = false
+    /// 当前渲染为 JSON/JSONL（usesJSONHighlighting）时缓存的完整文本；可见区惰性分色
+    /// 以此为行对齐子串分词与坏行相交的坐标基准。非 JSON 渲染为 nil，可见区上色据此跳过。
+    private var activeJSONText: String?
+    /// 当前 JSON/JSONL 渲染的坏行在输出文本中的 UTF-16 区间（JSONL 坏行才非空）；
+    /// 与可见范围相交者覆盖红前景 + 红背景。
+    private var activeInvalidRanges: [NSRange] = []
+    /// scrollView.contentView 滚动（boundsDidChange）观察 token；触发可见区惰性上色。
+    /// deinit 在 Swift 6 严格并发下总是 nonisolated，无法访问主 actor 隔离的存储属性；
+    /// 此清理只是摘掉注册在 NotificationCenter 的 token，无跨线程数据竞争，
+    /// nonisolated(unsafe) 据实况解除隔离检查。
+    private nonisolated(unsafe) var jsonHighlightScrollObserver: NSObjectProtocol?
     /// 递增即作废在途布局泵；每次内容或换行模式变化后 startLayoutPump() 重启。
     private var layoutPumpGeneration = 0
     /// 递增即作废在途高亮分块流；tab 切换/关闭/重新渲染时 invalidateHighlighting() 推进，
@@ -433,7 +437,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         rootView.addSubview(contentView)
         setupHeader()
         setupTextView()
-        setupJSONOutlineView()
         setupEmptyView()
 
         let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: 210)
@@ -459,11 +462,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-
-            jsonOutlineView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
-            jsonOutlineView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            jsonOutlineView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            jsonOutlineView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
             emptyView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             emptyView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor)
@@ -744,27 +742,13 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         modeControl.selectedSegment = PreviewMode.formatted.rawValue
         modeControl.segmentStyle = .texturedRounded
 
-        jsonViewToggle.target = self
-        jsonViewToggle.action = #selector(jsonViewModeChanged(_:))
-        jsonViewToggle.selectedSegment = 0
-        jsonViewToggle.segmentStyle = .texturedRounded
-        jsonViewToggle.isHidden = true
-        jsonViewToggle.toolTip = "Switch between tree and raw text view"
-
-        configureIconButton(
-            foldButton,
-            symbol: "arrow.down.right.and.arrow.up.left",
-            tooltip: "Collapse nested JSON",
-            action: #selector(toggleJSONFolding(_:))
-        )
-        foldButton.setButtonType(.toggle)
         configureIconButton(wrapButton, symbol: "text.alignleft", tooltip: "Toggle line wrap", action: #selector(toggleWrap(_:)))
         configureIconButton(copyButton, symbol: "doc.on.doc", tooltip: "Copy", action: #selector(showCopyMenu(_:)))
         configureIconButton(revealButton, symbol: "magnifyingglass", tooltip: "Reveal in Finder", action: #selector(revealInFinder(_:)))
         configureIconButton(openButton, symbol: "folder", tooltip: "Open", action: #selector(openClicked(_:)))
         configureCopyMenu()
 
-        let controls = NSStackView(views: [modeControl, jsonViewToggle, foldButton, wrapButton, copyButton, revealButton, openButton])
+        let controls = NSStackView(views: [modeControl, wrapButton, copyButton, revealButton, openButton])
         controls.orientation = .horizontal
         controls.alignment = .centerY
         controls.spacing = 8
@@ -782,7 +766,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             headerStack.trailingAnchor.constraint(equalTo: headerView.trailingAnchor, constant: -14),
             headerStack.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
 
-            foldButton.widthAnchor.constraint(equalToConstant: 30),
             wrapButton.widthAnchor.constraint(equalToConstant: 30),
             copyButton.widthAnchor.constraint(equalToConstant: 30),
             revealButton.widthAnchor.constraint(equalToConstant: 30),
@@ -828,20 +811,36 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         textView.onFileDragActiveChanged = { [weak self] active in
             self?.rootView.setDropHighlight(active)
         }
+        textView.onEffectiveAppearanceChanged = { [weak self] in
+            self?.reapplyFollowSystemColorsIfNeeded()
+        }
 
         scrollView.documentView = textView
         scrollView.hasVerticalRuler = true
         scrollView.verticalRulerView = gutterView
         gutterView.connect(textView: textView, scrollView: scrollView)
+
+        // 滚动即重算可见区语义分色：观察 clip view 的 bounds 变更。
+        // setTemporaryAttributes 不改 bounds，故此回调不成循环。
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        jsonHighlightScrollObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            // addObserver(queue: .main) 的 block 形参是 @Sendable，编译器无法静态验证
+            // OperationQueue.main 与 MainActor 隔离域一致；queue: .main 已保证运行时必在
+            // 主线程，assumeIsolated 据实况断言而非新开 Task 调度。
+            MainActor.assumeIsolated {
+                self?.applyVisibleJSONHighlighting()
+            }
+        }
     }
 
-    /// JSON/JSONL 默认视图：树。与 scrollView 同区域叠放，按 showJSONTree/showPlainText
-    /// 二选一显示；结构由树的系统缩进 + disclosure 三角表达，故树可见时行号 gutter
-    /// （scrollView 的 verticalRulerView）随 scrollView 一起隐藏。
-    private func setupJSONOutlineView() {
-        jsonOutlineView.translatesAutoresizingMaskIntoConstraints = false
-        jsonOutlineView.isHidden = true
-        contentView.addSubview(jsonOutlineView)
+    deinit {
+        if let jsonHighlightScrollObserver {
+            NotificationCenter.default.removeObserver(jsonHighlightScrollObserver)
+        }
     }
 
     private func setupEmptyView() {
@@ -1024,8 +1023,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             render(
                 document: document,
                 mode: tab.mode,
-                collapseNestedJSON: tab.collapseNestedJSON,
-                jsonTreeVisible: tab.jsonTreeVisible,
                 targetLine: tab.targetLine,
                 tabID: tab.id
             )
@@ -1039,8 +1036,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func render(
         document: LoadedText,
         mode: PreviewMode,
-        collapseNestedJSON: Bool,
-        jsonTreeVisible: Bool,
         targetLine: Int?,
         tabID: UUID
     ) {
@@ -1048,21 +1043,23 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         modeControl.isEnabled = document.kind.hasFormattedPreview
         modeControl.setLabel(document.kind == .markdown ? "Preview" : "Format", forSegment: 0)
 
-        let canFoldJSON = (document.kind == .json || document.kind == .jsonl) && mode == .formatted
-        foldButton.isEnabled = canFoldJSON
-        foldButton.state = collapseNestedJSON && canFoldJSON ? .on : .off
-        foldButton.toolTip = collapseNestedJSON && canFoldJSON
-            ? "Expand nested JSON"
-            : "Collapse nested JSON"
-
         let rendered = PreviewRenderer.render(
             document: document,
-            mode: mode,
-            collapseNestedJSON: collapseNestedJSON && canFoldJSON
+            mode: mode
         )
         textView.textStorage?.setAttributedString(rendered.attributedText)
         applyDisplayMetadata(rendered.display)
-        applyEditorTheme(usesDarkModern: rendered.usesDarkModernTheme)
+        if rendered.usesJSONHighlighting {
+            activeJSONText = rendered.attributedText.string
+            activeInvalidRanges = rendered.display.invalidRecordRanges
+        } else {
+            activeJSONText = nil
+            activeInvalidRanges = []
+        }
+        applyEditorTheme(
+            followsSystemAppearance: rendered.followsSystemAppearance,
+            usesDarkModern: rendered.usesDarkModernTheme
+        )
         if let language = rendered.highlightLanguage {
             startHighlighting(text: document.text, language: language, tabID: tabID)
         }
@@ -1102,34 +1099,20 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         let targetLocation = targetLine.flatMap { rendered.display.targetLocationsByOriginalLine[$0] }
         scheduleInitialScroll(targetLine: targetLine, targetLocation: targetLocation, tabID: tabID)
 
-        if document.kind == .json || document.kind == .jsonl {
-            jsonViewToggle.isHidden = false
-            jsonViewToggle.isEnabled = true
-            jsonViewToggle.selectedSegment = jsonTreeVisible ? 0 : 1
-            if jsonTreeVisible {
-                presentJSONTree(document: document, tabID: tabID)
-            } else {
-                showPlainText()
-            }
-        } else {
-            jsonViewToggle.isHidden = true
-            showPlainText()
-        }
+        showPlainText()
+        applyVisibleJSONHighlighting()
     }
 
     private func renderError(message: String, url: URL) {
         titleLabel.stringValue = url.lastPathComponent
         metaLabel.stringValue = "Open failed"
         modeControl.isEnabled = false
-        jsonViewToggle.isHidden = true
-        foldButton.isEnabled = false
-        foldButton.state = .off
         revealButton.isEnabled = true
         copyButton.isEnabled = true
 
         textView.textStorage?.setAttributedString(SyntaxHighlighter.monospace(message))
         applyDisplayMetadata(.plain)
-        applyEditorTheme(usesDarkModern: false)
+        applyEditorTheme(followsSystemAppearance: false, usesDarkModern: false)
         clearMarkdownOutline()
         showPreviewState()
         showPlainText()
@@ -1138,66 +1121,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         startLayoutPump()
     }
 
-    // MARK: - JSON 树 / 原文切换
-
-    /// JSON 树当前是否为可见视图（json/jsonl tab 且未切到原文）；供主菜单折叠命令族
-    /// （全部展开/全部折叠/折叠到第 N 层）的可用性判定。
-    var isJSONTreeActive: Bool {
-        guard let tab = activeTab, let document = tab.document else { return false }
-        return (document.kind == .json || document.kind == .jsonl) && tab.jsonTreeVisible
-    }
-
-    func expandJSONTreeAll() {
-        jsonOutlineView.expandAll()
-    }
-
-    func collapseJSONTreeAll() {
-        jsonOutlineView.collapseAll()
-    }
-
-    func collapseJSONTree(toLevel level: Int) {
-        jsonOutlineView.collapseToLevel(level)
-    }
-
-    /// JSON/JSONL 默认视图 = 树：索引已缓存（tab 曾激活过）直接无闪切换，沿用该 tab
-    /// 已有的展开状态，不重新应用默认展开；否则先保持原文文本视图可见，后台构建
-    /// 索引，就绪且该 tab 仍激活时才切到树，并仅在这个首次构建的分支里应用一次
-    /// 默认展开策略，避免闪切换/切错 tab 的竞态，也避免每次切回 tab 都强制重展。
-    private func presentJSONTree(document: LoadedText, tabID: UUID) {
-        guard let tabIndex = tabs.firstIndex(where: { $0.id == tabID }) else { return }
-
-        if let cachedIndex = tabs[tabIndex].jsonTreeIndex {
-            showJSONTree(cachedIndex)
-            return
-        }
-
-        showPlainText()
-
-        let text = document.text
-        let kind = document.kind
-        DispatchQueue.global(qos: .userInitiated).async {
-            let builtIndex = JSONTreeIndex.build(text: text, kind: kind)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                guard let currentTabIndex = self.tabs.firstIndex(where: { $0.id == tabID }) else { return }
-                self.tabs[currentTabIndex].jsonTreeIndex = builtIndex
-                guard self.activeTabID == tabID else { return }
-                self.showJSONTree(builtIndex)
-                self.jsonOutlineView.applyDefaultExpansion()
-            }
-        }
-    }
-
-    private func showJSONTree(_ index: JSONTreeIndex) {
-        guard let document = activeTab?.document else { return }
-        jsonOutlineView.setContent(index: index, text: document.text, kind: document.kind)
-        scrollView.isHidden = true
-        jsonOutlineView.isHidden = false
-    }
-
+    /// 恒单 textView 视图：显示编辑器 scrollView（含 textView + 行号 gutter）。
     private func showPlainText() {
-        jsonOutlineView.isHidden = true
-        jsonOutlineView.reset()
         scrollView.isHidden = false
     }
 
@@ -1228,16 +1153,142 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     // MARK: - 高亮接入（R4e）：Dark Modern 主题 + 分块原位上色
 
-    /// 编辑器区（scrollView + textView + gutterView）整体切 Dark Modern 外观：显式覆盖
-    /// appearance 让 indent guides/record 注解等既有动态系统色（DropTextView 内绘制）
-    /// 也随之解析为深色变体；背景/gutter 精确色值另见 DarkModernTheme。
-    private func applyEditorTheme(usesDarkModern: Bool) {
-        let appearance = usesDarkModern ? NSAppearance(named: .darkAqua) : nil
-        scrollView.appearance = appearance
-        textView.appearance = appearance
-        gutterView.appearance = appearance
-        textView.backgroundColor = usesDarkModern ? DarkModernTheme.background : .textBackgroundColor
-        gutterView.usesDarkModernTheme = usesDarkModern
+    /// 编辑器区（scrollView + textView + gutterView）主题三分流：
+    /// - followsSystemAppearance（JSON/JSONL）：appearance = nil 跟随系统，背景/全文
+    ///   基础前景经 `PeekyTheme` 按当前 effectiveAppearance 解析成单色主题色。
+    /// - usesDarkModern（源码高亮）：钉死 darkAqua + `DarkModernTheme.background`。
+    /// - 皆否（markdown/xml/plist/yaml/text）：appearance = nil + `.textBackgroundColor`。
+    private func applyEditorTheme(followsSystemAppearance: Bool, usesDarkModern: Bool) {
+        activeRenderFollowsSystemAppearance = followsSystemAppearance
+
+        if followsSystemAppearance {
+            scrollView.appearance = nil
+            textView.appearance = nil
+            gutterView.appearance = nil
+            applyFollowSystemEditorColors()
+        } else if usesDarkModern {
+            let appearance = NSAppearance(named: .darkAqua)
+            scrollView.appearance = appearance
+            textView.appearance = appearance
+            gutterView.appearance = appearance
+            textView.backgroundColor = DarkModernTheme.background
+        } else {
+            scrollView.appearance = nil
+            textView.appearance = nil
+            gutterView.appearance = nil
+            textView.backgroundColor = .textBackgroundColor
+        }
+    }
+
+    /// JSON/JSONL 跟随系统外观：按 textView 当前 effectiveAppearance 解析出 light/dark，
+    /// 施加编辑器背景色并把全文基础前景铺成单色主题前景（逐 token 分色由后续单元做）。
+    private func applyFollowSystemEditorColors() {
+        let appearance = PeekyTheme.resolveAppearance(textView.effectiveAppearance)
+        textView.backgroundColor = PeekyTheme.color(.editorBackground, appearance: appearance)
+        if let textStorage = textView.textStorage, textStorage.length > 0 {
+            textStorage.addAttribute(
+                .foregroundColor,
+                value: PeekyTheme.color(.editorForeground, appearance: appearance),
+                range: NSRange(location: 0, length: textStorage.length)
+            )
+        }
+    }
+
+    /// 系统明暗切换即时跟随：仅当最近一次渲染跟随系统外观（JSON/JSONL）时，重刷编辑器
+    /// 背景 + 全文基础前景，并触发 gutter 重绘。
+    func reapplyFollowSystemColorsIfNeeded() {
+        guard activeRenderFollowsSystemAppearance else { return }
+        applyFollowSystemEditorColors()
+        gutterView.needsDisplay = true
+        applyVisibleJSONHighlighting()
+    }
+
+    /// JSON/JSONL 惰性语义分色：仅对屏幕可见区上色，绝不整文分词。求出可见字符范围后
+    /// 逐可见行遍历（从可视区首行起，到可视区末尾加 8192 buffer 为止），单行长度超过
+    /// maxLineLength(65536 UTF-16) 的巨大单行值跳过分词、保留单色基础前景，避免超长单行
+    /// tokenize 退化成近全文级卡主线程。逐行对齐保证 key/value 冒号判定在行内完整、词法
+    /// 正确，只对每行子串调 `JSONHighlighter.tokenize`，token range 加该行起点偏移平移回全文
+    /// 坐标，用 setTemporaryAttributes 施加语义前景色。坏行与可视行范围相交部分覆盖红前景
+    /// （setTemporaryAttributes，后施加故优先于 token 色）+ 红背景（textStorage.addAttribute，
+    /// 坏行数量少可接受）。setTemporaryAttributes 不改 bounds，故 boundsDidChange / pumpLayout
+    /// 触发不成循环。非 JSON 渲染（activeJSONText == nil）直接跳过。
+    private func applyVisibleJSONHighlighting() {
+        guard let fullText = activeJSONText else { return }
+        guard
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer
+        else { return }
+
+        let nsText = fullText as NSString
+        guard nsText.length > 0 else { return }
+
+        let visibleGlyphRange = layoutManager.glyphRange(
+            forBoundingRectWithoutAdditionalLayout: textView.visibleRect,
+            in: textContainer
+        )
+        guard visibleGlyphRange.length > 0 else { return }
+        let visibleCharRange = layoutManager.characterRange(forGlyphRange: visibleGlyphRange, actualGlyphRange: nil)
+
+        let clampedLocation = min(max(visibleCharRange.location, 0), nsText.length)
+        let clampedLength = min(visibleCharRange.length, nsText.length - clampedLocation)
+        let clampedRange = NSRange(location: clampedLocation, length: clampedLength)
+
+        let maxLineLength = 65536
+        let visibleEndCap = min(NSMaxRange(clampedRange) + 8192, nsText.length)
+        let firstVisibleLineStart = nsText.lineRange(
+            for: NSRange(location: clampedRange.location, length: 0)
+        ).location
+
+        let appearance = PeekyTheme.resolveAppearance(textView.effectiveAppearance)
+
+        var lineStart = firstVisibleLineStart
+        while lineStart < visibleEndCap {
+            let line = nsText.lineRange(for: NSRange(location: lineStart, length: 0))
+            guard line.length > 0 else { break }
+
+            if line.length <= maxLineLength {
+                let offset = line.location
+                for token in JSONHighlighter.tokenize(nsText.substring(with: line)) {
+                    let themeColor: PeekyTheme.ThemeColor
+                    switch token.kind {
+                    case .key: themeColor = .jsonKey
+                    case .string: themeColor = .jsonString
+                    case .number: themeColor = .jsonNumber
+                    case .boolLiteral: themeColor = .jsonBool
+                    case .nullLiteral: themeColor = .jsonNull
+                    case .punctuation: themeColor = .jsonPunctuation
+                    }
+                    let globalRange = NSRange(location: token.range.location + offset, length: token.range.length)
+                    layoutManager.setTemporaryAttributes(
+                        [.foregroundColor: PeekyTheme.color(themeColor, appearance: appearance)],
+                        forCharacterRange: globalRange
+                    )
+                }
+            }
+
+            lineStart = NSMaxRange(line)
+        }
+
+        guard !activeInvalidRanges.isEmpty else { return }
+        let visibleLineRange = NSRange(
+            location: firstVisibleLineStart,
+            length: visibleEndCap - firstVisibleLineStart
+        )
+        let invalidForeground = PeekyTheme.color(.invalidLineForeground, appearance: appearance)
+        let invalidBackground = PeekyTheme.color(.invalidLineBackground, appearance: appearance)
+        for invalidRange in activeInvalidRanges {
+            let intersection = NSIntersectionRange(invalidRange, visibleLineRange)
+            guard intersection.length > 0, intersection.location + intersection.length <= nsText.length else { continue }
+            layoutManager.setTemporaryAttributes(
+                [.foregroundColor: invalidForeground],
+                forCharacterRange: intersection
+            )
+            textView.textStorage?.addAttribute(
+                .backgroundColor,
+                value: invalidBackground,
+                range: intersection
+            )
+        }
     }
 
     /// 递增高亮代际并取消在途分块流；tab 切换/关闭/重新渲染前必调，防止旧文档的
@@ -1530,18 +1581,13 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         titleLabel.stringValue = "Peeky"
         emptyView.isHidden = false
         scrollView.isHidden = true
-        jsonOutlineView.isHidden = true
-        jsonOutlineView.reset()
         modeControl.isEnabled = false
-        jsonViewToggle.isHidden = true
-        foldButton.isEnabled = false
-        foldButton.state = .off
         revealButton.isEnabled = false
         copyButton.isEnabled = false
         metaLabel.stringValue = ""
         textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
         applyDisplayMetadata(.plain)
-        applyEditorTheme(usesDarkModern: false)
+        applyEditorTheme(followsSystemAppearance: false, usesDarkModern: false)
         applyMarkdownReadingColumn(isActive: isMarkdownReadingColumnActive)
         clearMarkdownOutline()
     }
@@ -1608,11 +1654,13 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         let firstUnlaid = layoutManager.firstUnlaidCharacterIndex()
         guard firstUnlaid < length else {
             gutterView.needsDisplay = true
+            applyVisibleJSONHighlighting()
             return
         }
 
         let chunkLength = min(64_000, length - firstUnlaid)
         layoutManager.ensureLayout(forCharacterRange: NSRange(location: firstUnlaid, length: chunkLength))
+        applyVisibleJSONHighlighting()
         DispatchQueue.main.async { [weak self] in
             self?.pumpLayout(generation: generation)
         }
@@ -1636,25 +1684,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc private func modeChanged(_ sender: NSSegmentedControl) {
         guard let index = activeTabIndex else { return }
         tabs[index].mode = PreviewMode(rawValue: sender.selectedSegment) ?? .formatted
-        renderActiveTab()
-    }
-
-    @objc private func toggleJSONFolding(_ sender: Any?) {
-        guard
-            let index = activeTabIndex,
-            let document = tabs[index].document,
-            document.kind == .json || document.kind == .jsonl
-        else {
-            return
-        }
-
-        tabs[index].collapseNestedJSON.toggle()
-        renderActiveTab()
-    }
-
-    @objc private func jsonViewModeChanged(_ sender: NSSegmentedControl) {
-        guard let index = activeTabIndex else { return }
-        tabs[index].jsonTreeVisible = sender.selectedSegment == 0
         renderActiveTab()
     }
 

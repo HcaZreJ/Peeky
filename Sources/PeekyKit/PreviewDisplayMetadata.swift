@@ -50,21 +50,13 @@ struct PreviewGutterConfiguration {
     }
 }
 
-struct PreviewRecordAnnotation {
-    let characterLocation: Int
-    let text: String
-    let isWarning: Bool
-}
-
 struct PreviewTextOverlayConfiguration {
     let showsIndentGuides: Bool
     let recordSeparatorLocations: [Int]
-    let recordAnnotations: [PreviewRecordAnnotation]
 
     static let hidden = PreviewTextOverlayConfiguration(
         showsIndentGuides: false,
-        recordSeparatorLocations: [],
-        recordAnnotations: []
+        recordSeparatorLocations: []
     )
 }
 
@@ -72,11 +64,15 @@ struct PreviewDisplayMetadata {
     let gutter: PreviewGutterConfiguration
     let textOverlay: PreviewTextOverlayConfiguration
     let targetLocationsByOriginalLine: [Int: Int]
+    /// JSONL 坏行在输出文本中的 UTF-16 区间；PreviewWindowController 据此用
+    /// `PeekyTheme.invalidLine*`（跟随系统外观）给坏行正文上红。非 JSONL 为空。
+    let invalidRecordRanges: [NSRange]
 
     static let plain = PreviewDisplayMetadata(
         gutter: .hidden,
         textOverlay: .hidden,
-        targetLocationsByOriginalLine: [:]
+        targetLocationsByOriginalLine: [:],
+        invalidRecordRanges: []
     )
 
     static func lineNumbers(for text: String, showsIndentGuides: Bool) -> PreviewDisplayMetadata {
@@ -84,10 +80,10 @@ struct PreviewDisplayMetadata {
             gutter: .lineNumbers(for: text),
             textOverlay: PreviewTextOverlayConfiguration(
                 showsIndentGuides: showsIndentGuides,
-                recordSeparatorLocations: [],
-                recordAnnotations: []
+                recordSeparatorLocations: []
             ),
-            targetLocationsByOriginalLine: [:]
+            targetLocationsByOriginalLine: [:],
+            invalidRecordRanges: []
         )
     }
 
@@ -100,24 +96,16 @@ struct PreviewDisplayMetadata {
             )
         }
 
-        let annotations = records.map {
-            PreviewRecordAnnotation(
-                characterLocation: $0.range.location,
-                text: $0.summary,
-                isWarning: $0.isInvalid
-            )
-        }
-
         let targets = Dictionary(uniqueKeysWithValues: records.map { ($0.originalLine, $0.range.location) })
 
         return PreviewDisplayMetadata(
             gutter: .markers(markers),
             textOverlay: PreviewTextOverlayConfiguration(
                 showsIndentGuides: true,
-                recordSeparatorLocations: records.dropFirst().map { $0.range.location },
-                recordAnnotations: annotations
+                recordSeparatorLocations: records.dropFirst().map { $0.range.location }
             ),
-            targetLocationsByOriginalLine: targets
+            targetLocationsByOriginalLine: targets,
+            invalidRecordRanges: records.filter { $0.isInvalid }.map { $0.range }
         )
     }
 
