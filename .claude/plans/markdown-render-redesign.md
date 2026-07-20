@@ -1,181 +1,133 @@
-# Feature: Markdown 渲染重构（GFM · 高保真对齐 github-markdown-css · 单 Preview · 原生选中复制）
+# Feature: Markdown 渲染（WKWebView + 真 github-markdown-css）
 
 ## Overview
 
-把 markdown 预览从「Preview/Raw 双档 + 自适应系统色的近似排版」收敛成**单一 Preview**：一个原生 `NSTextView` 渲染的 `NSAttributedString`，视觉高保真对齐 github-markdown-css（light + dark 两套调色板），文本可见选中并原生 `⌘C` 复制。范围只做 **GFM**；GLFM 专属元素在 issue #14 逐项跟进。
-
-痛点：现状排版用自适应系统色做近似、观感不达 GitHub；Preview/Raw 双档冗余；选区高亮被设成透明导致「看起来选不中」、复制菜单只会整文件复制。
+Markdown 预览用 **WKWebView 渲染 HTML + 内嵌真正的 github-markdown-css** 实现——像素级对齐 github 由 CSS 引擎保证，而非在原生 TextKit 里手工临摹 CSS。**混合架构**：仅 markdown 走 WebView；JSON/JSONL/源码/日志/纯文本仍走既有原生（NSTextView / NSOutlineView）即时渲染。选中+复制由 WebView 原生自带。**零新增 SPM 依赖**：用现有 swift-markdown 解析、手写 AST→HTML、内嵌 CSS 资源。
 
 ## Intent Brief
 
-- **Goal**：markdown 预览「好看（高保真复刻 github-markdown-css）+ 启动快」，单视图，能原生选中并复制任意片段。
-- **Motivation**：现渲染观感差、可读性低；用户只要一个干净、像 GitHub、能选能拷的预览。
-- **Known context**：渲染面是 `DropTextView: NSTextView`（TextKit1，喂 `NSAttributedString`，零 HTML/WebView）。`MarkdownRenderer` 用 swift-markdown AST + 自定义 `MarkupVisitor` 手搓 attributed string，已覆盖 GFM 主要元素（真表格 `NSTextTable`、任务列表、代码围栏 + shiki 高亮、引用、删除线、链接、自动链接、标题大纲）。排版常量标注为「GitHub Primer derived」。
-- **Constraints**：repo 铁律——只读查看器、纯函数核心、零第三方 SPM 依赖默认、性能预算（读取 80MB / 富格式化 8MB / 高亮 1.5M UTF-16）、主线程纪律。启动快是硬约束。
-- **Non-goals**：不引入 WKWebView/HTML/CSS 运行时；不做 GLFM 专属元素（→ issue #14）；不动 JSON/JSONL 的 tree/text 渲染（另案）；不改源码文件（`FileKind.text`）因扩展名命中 shiki 而变暗的既有行为。
-- **Success criteria**：① markdown 只有单一 Preview；② 拖拽有可见选区高亮且 `⌘C` 复制选中片段、复制菜单含「复制选中」；③ 结构化属性断言全部命中 github-markdown-css 目标值（见 Work-Unit Specs 的色值/字号表）；④ light 与 dark 系统外观下各自呈现对应 github 调色板；⑤ 用户对整体观感做「好看」终审签字。
-- **Assumptions**：见 Assumption Ledger。
-- **Unknowns**：像素级天花板——原生 attributed string 与真 CSS 之间存在无法完全弥合的细节（圆角、精确内边距渲染），用户接受先看原生效果再定是否局部补强。
+- **Goal**：markdown 预览像素级「就是 github」，选中可复制，启动可接受。
+- **Motivation**：原生 TextKit 手工复刻 CSS 收敛不了（标题线、表格、引用、任务列表逐一失真），且后台作业无法自验视觉；用 CSS 引擎渲染 CSS 是唯一可靠达成「对齐 github-markdown-css」的路径。
+- **Known context**：peeky 是常驻窗口 app（PreviewWindowController + tabs）；资源经 `Peeky_PeekyKit.bundle` 多候选寻径加载（见 HighlightService.loadBundleSource）；swift-markdown 0.8.0 已在依赖。
+- **Constraints**：零第三方 SPM 依赖（WKWebView 是系统框架，不算 SPM 依赖）；性能预算沿用；主线程纪律。
+- **Non-goals**：不改 JSON/源码/日志等的原生渲染；不做 GLFM 专属元素（issue #14）；markdown 代码块**不做语法高亮**（github-markdown-css 本身不含高亮，仅代码块样式，故不高亮即是「对齐 github-markdown-css」）。
+- **Success criteria**：markdown 经 WebView 呈现，标题/底边线/表格/引用（含嵌套）/任务列表/列表/代码块/行内码/链接与 github 一致；浅深随系统外观；文本可选中 ⌘C 复制；大纲侧栏可点跳转、`peeky://` 行定位可用；其它文件类型行为不变。
+- **Assumptions / Unknowns**：见 Ledger。
 
 ## Alignment Gate
 
-- **I will implement**：单 Preview（移除 markdown 的 Format/Raw 档）；可见选区高亮 + 复制选中；`MarkdownRenderer` 全量色彩/字号对齐 github-markdown-css（light+dark 调色板）；代码块/行内码背景填充保真。
-- **I will not implement**：WebView/HTML 路线；GLFM 元素；JSON/JSONL 视图变更；源码文件暗色主题逻辑变更。
-- **Open assumptions**：见 Ledger 中 status 非 accepted 的行。
-- **Acceptance criteria**：见 Success criteria；结构化测试全绿 + 用户观感签字。
+- **I will implement**：markdown → WKWebView（HTML + 真 github-markdown-css）；AST→HTML 纯函数；HTML 文档包装 + CSS 资源加载；WebView 集成（外观跟随、预热、大纲跳转、行定位、原生选中复制）。
+- **I will not implement**：其它文件类型的渲染改动；markdown 代码块语法高亮；GLFM 元素。
+- **Acceptance**：AST→HTML 结构化测试全绿 + 用户对 WebView 实机观感签字。
 
 ## Assumption Ledger
 
 | Assumption | Confidence | Impact if Wrong | Status |
 |---|---|---|---|
-| 「好看」=高保真复刻 github-markdown-css，可接受原生非像素级的保真上限 | high | high | 用户已确认 |
-| 启动快为硬约束 → 采原生 NSTextView 路线而非 WebView | high | high | 用户已确认（工作量非考量、可拆分） |
-| markdown 需同时忠实 light+dark（github-markdown-css 两套皆复刻），避免暗色系统下白色孤岛 | medium | medium | 架构师默认，随终审签字校验 |
-| 纯 `⌘C` 未被复制菜单快捷键占用，原生 copy: 即复制选区 | high | medium | 代码已证实（Copy All 为 ⌘⌥C） |
-| peeky:// 行定位反馈可改用瞬时高亮，无需再靠 setSelectedRange 占用选区外观 | medium | medium | 架构师默认，T3 落地校验 |
+| WebView 首帧一次性 ~100ms 量级、可预热隐藏，peeky 常驻模型下可接受 | high | medium | 用户已确认接受 |
+| 放宽 repo「无 WebView」约定（改用 WKWebView 渲 markdown） | high | high | 用户已批准 |
+| github-markdown-css 不含代码高亮，故 markdown 代码块不高亮即对齐 CSS | high | low | 架构师判断，随终审校验 |
+| 原生 markdown 路径（attributed MarkdownRenderer body + palette + 标题线绘制）在 WebView 落地后清理，outline 抽取保留复用 | high | low | 计划中，WebView 验收后执行 |
 
 ## Work-Unit Specs
 
-色值目标（github-markdown-css，`RRGGBBAA` 中末两位为 alpha）：
-
-| 语义 | light | dark |
-|---|---|---|
-| 正文/前景 | `#1f2328` | `#f0f6fc` |
-| 链接 | `#0969da` | `#4493f8` |
-| 行内码底 | `#818b981f` | `#656c7633` |
-| 代码块底 | `#f6f8fa` | `#151b23` |
-| 引用文字 | `#59636e` | `#9198a1` |
-| 引用条/表格边框/hr | `#d1d9e0` | `#3d444d` |
-| 表格斑马行底 | `#f6f8fa` | `#151b23` |
-| h1/h2 底边线 | `#d1d9e0b3` | `#3d444db3` |
-| 画布背景 | `#ffffff` | `#0d1117` |
-
-几何目标（github-markdown-css 基线，16px 基准）：h1 32/h2 24/h3 20/h4 16/h5 14/h6 13.6，字重 600，标题上距 24 下距 16、行高 1.25；正文行高 1.5、段后距 16；行内码 padding .2em/.4em、圆角 6、字号 85%；代码块 padding 16、圆角 6、行高 1.45、字号 85%；引用左边框 4pt、内边距左 16；列表左缩进 32（2em）；表格单元 padding 6/13、边框 1pt；hr 高 4pt。
-
 ```yaml
-- id: T1
-  title: GitHubMarkdownPalette + MarkdownRenderer 色彩/字号高保真对齐
-  file_path: Sources/PeekyKit/MarkdownRenderer.swift
+- id: W1
+  title: MarkdownHTMLRenderer——AST→HTML 纯函数（GFM 完整）
+  file_path: Sources/PeekyKit/MarkdownHTMLRenderer.swift   # 新文件
   functions:
-    - name: GitHubMarkdownPalette (新增 internal enum 命名空间，色彩单一真相)
-      inputs: []
-      outputs: 一组语义化「动态 NSColor」（text/link/inlineCodeBg/codeBlockBg/quoteText/border/tableZebra/headingRule/canvas）
+    - name: renderHTML(_ markdown: String) -> String
+      outputs: .markdown-body 的内层 HTML 片段
       behavioral_contract: |
-        每个语义色以 NSColor(name:dynamicProvider:) 构造为动态色：dark 外观解析为上表 dark 精确
-        十六进制（含 alpha）、其余外观解析为 light 精确十六进制。render(_:) 签名不变，单次渲染的
-        attributedText 在浅/深两外观下各自正确解析、无需重渲染。T3/T4 消费同一 palette。
+        用 swift-markdown 解析、MarkupVisitor 走 AST 输出 HTML：标题 h1-h6（按文档顺序
+        赋 id="heading-0/1/2…" 供大纲跳转）、段落、ul/ol、GFM 任务列表（<li> 内含
+        <input type=checkbox disabled [checked]>）、表格（<table><thead><th>…<tbody><td>，
+        列对齐用 style=text-align）、引用块（含多级嵌套 <blockquote>）、围栏代码块
+        （<pre><code class="language-x">，语言在 class）、行内码 <code>、<em>/<strong>/<del>、
+        链接 <a href>、图片 <img>、GFM 裸链接自动识别、<hr>、软/硬换行。所有文本内容
+        HTML 转义（& < > "）。
       error_cases:
-        - { condition: "未知/混合外观", behavior: "解析为 light 兜底" }
-    - name: bodyAttributes / headingAttributes / quoteAttributes / listAttributes / codeBlockAttributes / inlineCodeAttributes / linkAttributes / 表格样式 helper / hr
-      inputs: [depth/level/appearance 依既有签名]
-      outputs: 依既有签名的属性字典，颜色改取自 GitHubMarkdownPalette，字号/间距校正到几何目标
+        - { condition: "空/仅空白输入", behavior: "返回空串或最小片段，不崩" }
+        - { condition: "畸形/未闭合结构", behavior: "尽力渲染，不崩" }
+    - name: outline(in: String) -> [MarkdownOutlineItem]
       behavioral_contract: |
-        headingFontSize 补 h5=14、h6=13.6；h1/h2 底边线色改用 palette.headingRule；
-        引用文字改 palette.quoteText、引用条改 palette.border；行内码底改 palette.inlineCodeBg、
-        圆角 6、字号 85%；代码块底改 palette.codeBlockBg；链接改 palette.link；
-        表格边框/斑马改 palette.border/palette.tableZebra、单元 padding 6/13；hr 用 palette.border 高 4pt。
-        既有单侧段距模型（只用 trailing paragraphSpacing 表达块间距、headings 例外携 paragraphSpacingBefore）保持不变。
-      error_cases:
-        - { condition: "level>6 或 <1", behavior: "钳到 h6/h1 尺寸" }
+        标题按文档顺序抽取（level/title/sourceLine），顺序索引与 renderHTML 赋的
+        heading id 序号一致，供大纲项 → #heading-N 跳转对齐。可复用既有 MarkdownRenderer.outline。
   dependencies: []
-  reuse_candidates: |
-    复用现有 MarkupVisitor 全部访问方法与 NSTextTable 表格构造；仅替换颜色来源与字号常量，
-    新增 GitHubMarkdownPalette 作为唯一色彩出处。不新增依赖。
-  acceptance: |
-    结构化测试断言：各级标题字号、字重 600、链接色 #0969da/#4493f8、代码块底、行内码底、
-    引用文字/条、表格边框/斑马、hr、h1/h2 底边线，在 light 与 dark appearance 下各命中目标值。
+  reuse_candidates: 复用 swift-markdown 解析与既有 outline 抽取；HTML 转义自写小工具。
+  acceptance: 结构化测试断言各 GFM 元素的 HTML 输出（含嵌套引用、任务列表、表格对齐、
+    转义、标题 id 序号）；test-first + 盲测分离。
 
-- id: T2
-  title: PreviewRenderer 收敛——markdown 恒 formatted
-  file_path: Sources/PeekyKit/PreviewRenderer.swift
+- id: W2
+  title: HTML 文档包装 + github-markdown-css 资源加载
+  file_path: Sources/PeekyKit/MarkdownHTMLRenderer.swift   # 与 W1 同文件（组装层）
   functions:
-    - name: render(document:mode:)
-      inputs: [document, mode]
-      outputs: RenderedPreview
+    - name: documentHTML(bodyHTML: String, css: String) -> String
       behavioral_contract: |
-        markdown 分支恒走 formatted（MarkdownRenderer.renderWithOutline），不再因传入 mode=.raw
-        而产出 raw 文本；readBytes 超 richFormatLimit(8MB) 时仍安全回落到 raw 文本作为兜底。
-        usesDarkModernTheme 对 markdown 恒 false（markdown 走自身 github 调色板，不套 DarkModernTheme）。
-      error_cases:
-        - { condition: "文档超 8MB", behavior: "回落 raw 文本 + 计算 outline，不崩" }
-  dependencies: []
-  reuse_candidates: 复用既有 dispatch 与 richFormatLimit 兜底；仅去掉 markdown 的用户级 raw 分档。
-  acceptance: markdown 文档在任意 mode 入参下都返回 formatted 富文本（8MB 以内），tests 全绿。
+        组装完整文档：<!doctype html><html><head><meta charset utf-8>
+        <meta name="viewport"><style>{css}</style><style>{包装：body.markdown-body 内边距/
+        max-width、pre/table 横向滚动容器、图片 max-width:100%}</style></head>
+        <body class="markdown-body">{bodyHTML}</body>（含极简 JS：scrollToHeading(n)）。纯字符串组装、可单测。
+    - name: loadGithubMarkdownCSS() -> String
+      behavioral_contract: |
+        照 HighlightService 的多候选寻径从 Peeky_PeekyKit.bundle 读 github-markdown.css；
+        找不到返回空串（样式降级不崩）。
+  dependencies: [W1]
+  reuse_candidates: 复用 HighlightService.loadBundleSource 的 bundle 寻径模式。
+  acceptance: documentHTML 组装的结构化断言（含 markdown-body class、css 注入、body 注入）。
 
-- id: T3
-  title: PreviewWindowController——单 Preview + 可见选区 + 复制选中 + github 外观应用
+- id: W3
+  title: WKWebView 集成到 PreviewWindowController（markdown 专用）
   file_path: Sources/PeekyKit/PreviewWindowController.swift
   functions:
-    - name: setupTextView / applyEditorTheme / render 相关
-      inputs: []
-      outputs: void（UI 副作用）
+    - name: markdown 渲染切到 WKWebView
       behavioral_contract: |
-        ① selectedTextAttributes 改为可见高亮（选中背景取系统 selectedTextBackgroundColor 或
-        github 选区色），使拖拽选区可见。
-        ② peeky:// / 大纲行定位改用瞬时高亮（临时 .backgroundColor 属性，短延时后自动清除）替代
-        setSelectedRange 占用选区外观，两者互不干扰。
-        ③ markdown 时隐藏 Format/Raw 的 modeControl（单 Preview）；markdown 恒以 formatted 渲染。
-        ④ 依当前 effectiveAppearance 对 markdown 应用 github light/dark 画布背景与前景，
-        与 T1 palette 一致（暗色系统 → dark 画布，不出现白色孤岛）。
+        新增一个 markdown 专用 WKWebView（与 scrollView/jsonOutlineView 同区叠放，仅 markdown
+        显示、其它类型隐藏）；loadHTMLString(documentHTML, baseURL: nil)；外观跟随系统（不覆盖
+        webview appearance，prefers-color-scheme 自动切浅深）；app 启动/首次预热一个共享实例；
+        大纲项点击 → evaluateJavaScript scrollToHeading(index)；peeky:// line → 最近标题锚点；
+        选中+复制走 WebView 原生（无需自定义）。非 markdown 路径与既有原生渲染一律不变。
       error_cases:
-        - { condition: "无 activeTab", behavior: "静默不作为" }
-    - name: 复制选中 menu item + copySelection()
-      inputs: []
-      outputs: 写入 NSPasteboard
-      behavioral_contract: |
-        复制菜单新增「复制选中」项：复制 textView 当前选区字符串；选区为空时回落复制全文。
-        纯 ⌘C 仍由 NSTextView 原生 copy: 处理（复制选区），不被菜单快捷键抢占。
-      error_cases:
-        - { condition: "选区为空", behavior: "回落 copyAllText 语义" }
-  dependencies: [T1]
-  reuse_candidates: |
-    复用既有 copyMenu 结构与 copyAllText；复用 applyEditorTheme 的 appearance 切换骨架；
-    modeControl 既有 for-markdown 标签逻辑（:1048-1049）改为隐藏。
-  acceptance: |
-    markdown 无 Format/Raw 档；选区高亮可见（selectedTextAttributes 非 clear）；
-    「复制选中」写入选区字符串、空选区回落全文；light/dark 各应用对应 github 画布色。
+        - { condition: "CSS 资源缺失", behavior: "无样式裸 HTML，不崩" }
+        - { condition: "超 8MB", behavior: "沿用大文件降级策略" }
+  dependencies: [W1, W2]
+  reuse_candidates: 复用既有 showJSONTree/showPlainText 的同区叠放显隐骨架、大纲侧栏点击回调、
+    peeky:// 行定位入口。
+  acceptance: markdown 经 WebView 呈现且像素级对齐 github（用户浅深两外观观感签字）；
+    大纲跳转/行定位/选中复制可用；其它类型无回归（全量测试绿）。
 
-- id: T4
-  title: DropContainerView——代码块/行内码背景填充保真
-  file_path: Sources/PeekyKit/DropContainerView.swift
+- id: W4
+  title: 清理原生 markdown 渲染死路径
+  file_path: Sources/PeekyKit/MarkdownRenderer.swift, DropContainerView.swift, PreviewRenderer.swift
   functions:
-    - name: CodeBlockBackgroundLayoutManager 背景绘制
-      inputs: [attributed runs 携 codeBlockBackgroundAttributeKey / 行内码 key]
-      outputs: 绘制块级/行内码背景
+    - name: 移除 WebView 落地后不再使用的原生 markdown body 渲染
       behavioral_contract: |
-        块级代码背景填充色取 T1 palette.codeBlockBg（light #f6f8fa / dark #151b23），
-        圆角 6、覆盖块的内边距区域；行内码胶囊底色取 palette.inlineCodeBg、圆角 6，
-        沿字形紧致包裹。表格单元内的装饰绘制放行既有行为不回退。
-      error_cases:
-        - { condition: "无背景 key 的 run", behavior: "不绘制" }
-  dependencies: [T1]
-  reuse_candidates: 复用现有 CodeBlockBackgroundLayoutManager 绘制管线；仅统一取色到 palette。
-  acceptance: |
-    颜色已由 T1 达成（layout manager 消费 run 的 .backgroundColor = palette 色）；行内码圆角胶囊既有。
-    仅余「代码块方角→6px 圆角」纯绘制细节，暂缓至观感终审由用户拍板是否值得做。
+        WebView 路径验收通过后，移除仅服务原生 markdown body 的代码（GitHubMarkdownPalette、
+        标题底线绘制、attributed body 构造等），保留 outline 抽取。不影响其它类型的原生渲染
+        （代码/JSON 高亮、DropTextView 等）。
+  dependencies: [W3]
+  acceptance: 移除后全量测试绿、其它类型渲染无回归。
 ```
 
 ## Dependency Graph
 
 ```
-T1 (MarkdownRenderer, 定义 GitHubMarkdownPalette) ─┬─▶ T3 (PreviewWindowController, 用 palette.canvas)
-                                                   └─▶ T4 (DropContainerView, 用 palette 代码/行内码色)
-T2 (PreviewRenderer) — 独立
+W1 (MarkdownHTMLRenderer, AST→HTML) ─▶ W2 (HTML 包装 + CSS 加载) ─▶ W3 (WKWebView 集成) ─▶ W4 (清理原生死路径)
 ```
-无环（DAG）。T3/T4 均消费 T1 定义的 palette，故排在 T1 之后。
+无环（DAG）。
 
 ## Execution Waves
 
-- **Wave 1（并行，文件互不相同）**：T1 · T2 — 已完成
-- **Wave 2**：T3（deps T1 palette）。T4 的颜色已由 T1 顺带覆盖——`CodeBlockBackgroundLayoutManager` 直接以 run 的 `.backgroundColor` 为填充色，T1 已把代码块/行内码的 `.backgroundColor` 改为 palette 色，行内码圆角胶囊亦早已存在；T4 仅余「代码块方角→6px 圆角」一处纯绘制细节，其风险/收益由观感终审拍板，暂缓，不单独派发。
-
-各波内同文件不并行（各单元分属不同文件，天然满足）。
+- **Wave 1**：W1（AST→HTML，test-first 核心）
+- **Wave 2**：W2（HTML 包装 + CSS 加载，可与 W1 尾部衔接）
+- **Wave 3**：W3（WebView 集成，架构师直做，构建 + 用户观感验收）
+- **Wave 4**：W4（WebView 验收通过后清理原生死路径）
 
 ## 验收模型
 
-- **结构化测试**（test-first + 盲测分离）：断言 attributed string 的字号/字重/颜色/段距与 selection、copy 行为命中上表目标值；light 与 dark appearance 分别覆盖。
-- **观感终审**：结构测试全绿后，构建并把 markdown 预览实际效果交用户做「好看」签字，未签字前不视为完成。
+- **W1/W2 结构化测试**（test-first + 盲测分离）：断言 AST→HTML 各 GFM 元素输出、文档组装。
+- **W3 观感终审**：构建 .app，用户在浅/深两外观核对 markdown 与 github 一致后签字。
 
 ## Status
 
-In Progress — T1/T2/T3 已实现并逐单元验收（全量 163/163 绿，.app 构建+codesign 干净无告警）。待用户对 markdown 观感做「好看」终审签字，并就两处可选精修拍板：① 表格普通行/表头背景（现为系统色）是否改取 palette.canvas；② 代码块方角是否改 6px 圆角。签字通过 → Completed。
+In Progress — 已定 WebView 方案（用户批准放宽「无 WebView」约定）；github-markdown.css 已内嵌为资源；W1（AST→HTML）test-first 派发中。原生 markdown 路径待 W3 验收后于 W4 清理。

@@ -2,23 +2,31 @@
 
 ## 执行中 · Plan: markdown-render-redesign   (→ .claude/plans/markdown-render-redesign.md)
 
-Markdown 渲染重构：GFM · 高保真对齐 github-markdown-css（light+dark）· 单 Preview · 原生选中复制。
-验收含结构化测试全绿 + 用户对观感的「好看」终审签字。
+Markdown 改用 **WKWebView + 真 github-markdown-css**（混合架构，仅 markdown 用 WebView）。
+验收含 AST→HTML 结构化测试全绿 + 用户 WebView 实机观感签字。
 
-### Wave 1 — 已完成
-- [x] T1  GitHubMarkdownPalette + MarkdownRenderer 色彩/字号对齐   （hidden 41/41，50/50 全绿）
-- [x] T2  PreviewRenderer——markdown 恒 formatted   （hidden 15/15，18/18 全绿）
+### Wave 1 — 核心（test-first）
+- [ ] W1  MarkdownHTMLRenderer——AST→HTML 纯函数（GFM 完整）
+        file: Sources/PeekyKit/MarkdownHTMLRenderer.swift（新）  deps: —
+        spec: swift-markdown AST → HTML；标题赋 id=heading-N（与 outline 同序）、任务列表 checkbox、
+              表格对齐、嵌套引用、围栏代码块 language class、行内元素、HTML 转义
+        验收: 各 GFM 元素 HTML 结构化断言（含嵌套/转义/id 序号）全绿
 
-### Wave 2 — 进行中
-- [ ] T3  PreviewWindowController——单 Preview + 可见选区 + 复制选中 + github 画布
-        file: Sources/PeekyKit/PreviewWindowController.swift   deps: T1
-        spec: markdown 隐藏 Format/Raw 档；选区高亮改可见（github 选区色）；大纲/peeky:// 行定位
-              与选区解耦（导航改瞬时闪烁 showFindIndicator，不占选区、不再现失焦灰带）；
-              复制菜单加「复制选中」(纯逻辑 selectionCopyPayload：空选区回落全文)；
-              markdown 画布背景取 GitHubMarkdownPalette.canvas（浅 #ffffff / 深 #0d1117）
-        验收: 无 Format/Raw 档 + 拖拽选区可见可 ⌘C 复制 + 复制选中生效 + 导航不留灰带 +
-              浅/深画布色正确；按 DEVFLOW 手动验收清单两外观各过一遍 + 用户观感签字
+### Wave 2 — 组装
+- [ ] W2  HTML 文档包装 + github-markdown.css 资源加载
+        file: Sources/PeekyKit/MarkdownHTMLRenderer.swift  deps: W1
+        spec: documentHTML(body,css) 组装完整文档（markdown-body class + css 注入 + 包装样式 + 极简滚动 JS）；
+              loadGithubMarkdownCSS 照 HighlightService 多候选寻径读资源
+        验收: 组装结构化断言
 
-### 暂缓（观感终审时定夺）
-- [ ] T4  代码块方角→6px 圆角（纯绘制细节）
-        note: 颜色已由 T1 覆盖、行内码圆角胶囊既有；此项风险/收益由用户看实机后拍板
+### Wave 3 — 集成（架构师直做 + 观感验收）
+- [ ] W3  WKWebView 集成到 PreviewWindowController（markdown 专用）
+        file: Sources/PeekyKit/PreviewWindowController.swift  deps: W1,W2
+        spec: markdown 专用 WebView 同区叠放显隐；loadHTMLString；外观跟随系统；预热共享实例；
+              大纲点击→scrollToHeading(JS)；peeky:// 行→最近标题；选中复制走原生。其它类型不变
+        验收: WebView 呈现像素级对齐 github（用户浅深两外观签字）+ 其它类型全量测试无回归
+
+### Wave 4 — 清理（W3 验收后）
+- [ ] W4  清理原生 markdown 死路径（palette/标题线绘制/attributed body），保留 outline
+        file: MarkdownRenderer.swift, DropContainerView.swift, PreviewRenderer.swift  deps: W3
+        验收: 移除后全量测试绿、其它类型无回归
