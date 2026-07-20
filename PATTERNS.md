@@ -6,7 +6,7 @@
 - `PreviewRenderer` 是"决策层"：选 Raw/Formatted 路径、执行性能预算降级、委派叶子模块——不碰视图几何。
 
 ## 视图约定
-- 文本类内容渲染进单一 `NSTextView`（`DropTextView`）的 `NSAttributedString`；JSON/JSONL 默认走 `JSONOutlineView`（view-based NSOutlineView + `JSONTreeIndex` 惰性数据源 + >100 分桶），原文文本模式可切换。
+- 文本类内容渲染进单一 `NSTextView`（`DropTextView`）的 `NSAttributedString`。JSON/JSONL 走同一 textView：`PreviewRenderer` 产 pretty-print 文本（`SyntaxHighlighter.monospace` 基础等宽），`PreviewWindowController.applyVisibleJSONHighlighting` 用 `JSONHighlighter` 对**可视区行对齐子串**（`lineRange(for:)` 扩展）tokenize、经 `layoutManager.setTemporaryAttributes` 只给屏幕可见行上语义色——滚动/布局泵/外观变化时重算，只算可见区、绝不 tokenize 全文，故几万行 JSONL 流畅。
 - gutter = `PreviewGutterView`（`NSRulerView` 子类，scrollView 的 verticalRulerView）：`drawHashMarksAndLabels` 全接管，仅枚举可见 glyph 范围，**每个逻辑行只在首个视觉行片段绘行号**（对比 line-start 偏移命中法，折行后续行天然不编号）；滚动同步用 `convert(NSZeroPoint, from: textView)` 坐标平移，bounds/frame/didChange 三路通知触发重绘。overlay（记录分隔线/注解）同样按可见范围增量绘制，虚拟化交给 `NSLayoutManager`。
 - 行号查找用预计算 line-start 偏移 + 二分。
 - **异步分块上色的代际防护**：流式高亮（`highlightStream`）的消费 Task 必须挂 `highlightGeneration` + `activeTabID` 双校验，`renderActiveTab()` 开头单点 `invalidateHighlighting()`（取消在途 Task 并递增代际）——杜绝旧文档的迟到 chunk 刷到新内容。上色只 `addAttribute`，绝不整文重设 attributedString。
@@ -14,10 +14,11 @@
 - **自绘视图必须 `clipsToBounds = true`**：macOS 14 起 NSView 默认不裁剪，`draw(_:)` 收到的 dirtyRect 可远大于 bounds（窗口首帧为整窗），`fill(dirtyRect)` 会把背景涂到兄弟视图上（表现为兄弟"空白"，且 resize 救不回）。
 - **textView 换行/不换行两分支都必须显式 `maxSize = greatestFiniteMagnitude`**：NSTextView 布局驱动的 frame 增长走 `setConstrainedFrameSize`，被钳在 maxSize 内，而默认 maxSize 是初始 frame（视口大小）——漏设时长文档 frame 长不过视口高度，scrollView 没有可滚动区域（`applyLineWrapping` 两分支均已设置）。
 - **文档布局由渲染管线主动推进**：macOS 26 上 TextKit1 惰性布局不自行推进；`PreviewWindowController.startLayoutPump()` 在每次内容/换行模式变化后主线程分片 `ensureLayout`（每拍 64k 字符、`main.async` 让出 runloop），frame 渐进长高、交互不阻塞。gutter/overlay 绘制保持零布局副作用（`withoutAdditionalLayout` 变体）只读已就绪数据；程序化跳转（`scrollToLine` 等）在 `scrollRangeToVisible` 前对目标 range 先 `ensureLayout`。
+- **配色集中于 `PeekyTheme`**：light/dark 两套语义 palette 是文件顶部两张 `[ThemeColor: hex]` 常量表，渲染代码按语义 token（`jsonString`/`jsonKey`/`editorBackground`…）取色、不写死颜色——换配色只改常量。编辑器主题三分流（`applyEditorTheme`）：`followsSystemAppearance`（JSON/JSONL）appearance=nil 跟随系统、背景/全文基础前景/gutter/坏行经 `resolveAppearance(effectiveAppearance)` 取色，系统明暗切换经 `DropTextView.onEffectiveAppearanceChanged` 回调重刷可视区；`usesDarkModernTheme`（源码 shiki）钉死 darkAqua；其余走 `.textBackgroundColor`。
 
 ## 性能预算（既有常量，新代码不得绕过）
 - `TextFileLoader.maxPreviewBytes = 80MB`（超出截断读取并标注）
-- `PreviewRenderer.richFormatLimit = 8MB`（超出静默降级 raw）
+- `PreviewRenderer.richFormatLimit = 8MB`（超出静默降级 raw；**JSON/JSONL 豁免**——即使超 8MB 仍 pretty-print，靠可视区惰性上色 + 布局泵扛，只受 `TextFileLoader` 80MB 原始上限约束）
 - `SyntaxHighlighter.highlightLimit = 1.5M UTF-16`（超出跳过高亮）
 - 重计算放后台线程，UI 回主线程（上游同步渲染是已知债，新增代码不复制该模式）。
 

@@ -213,18 +213,4 @@ struct Hidden_previewRenderer {
         #expect(rendered.outline.isEmpty)
         #expect(rendered.attributedText.length > 0)
     }
-
-    // MARK: - collapseNestedJSON 对 markdown 无影响（该参数仅服务 JSON 渲染）
-
-    @Test("previewRenderer: collapseNestedJSON 参数不影响 markdown 的渲染文本与大纲")
-    func test_previewRenderer_collapseNestedJSONFlagDoesNotAffectMarkdown() {
-        let text = "# Heading\n\nBody paragraph."
-        let document = loadedMarkdown(text)
-
-        let withoutCollapse = PreviewRenderer.render(document: document, mode: .formatted, collapseNestedJSON: false)
-        let withCollapse = PreviewRenderer.render(document: document, mode: .formatted, collapseNestedJSON: true)
-
-        #expect(withoutCollapse.attributedText.string == withCollapse.attributedText.string)
-        #expect(withoutCollapse.outline.count == withCollapse.outline.count)
-    }
 }
