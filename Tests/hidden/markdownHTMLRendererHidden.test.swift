@@ -170,7 +170,9 @@ struct Hidden_markdownHTMLRenderer {
 
     @Test("表格结构标签齐全，显式左/右对齐列各自带对应 align 属性")
     func test_renderHTML_tableExplicitLeftAndRightAlignment() throws {
-        let markdown = "| A | B |\n| :-- | --: |\n| c | d |"
+        // 体单元格用唯一 token（P/Q，不与任何标签/属性名冲突），避免探针文本
+        // 撞上 <thead>/<td> 里的字母而 range(of:) 找歪。
+        let markdown = "| A | B |\n| :-- | --: |\n| P | Q |"
         let html = MarkdownHTMLRenderer.renderHTML(markdown)
 
         #expect(html.contains("<table>"))
@@ -186,8 +188,8 @@ struct Hidden_markdownHTMLRenderer {
         let thB = try #require(openingTag("th", before: "B", in: html))
         #expect(thB.contains("align=\"right\""))
 
-        let tdD = try #require(openingTag("td", before: "d", in: html))
-        #expect(tdD.contains("align=\"right\""))
+        let tdRight = try #require(openingTag("td", before: "Q", in: html))
+        #expect(tdRight.contains("align=\"right\""))
     }
 
     @Test("表格列无显式对齐标记时，该列单元格不携带 align 属性")
