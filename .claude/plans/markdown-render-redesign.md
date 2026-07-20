@@ -57,14 +57,15 @@
   title: GitHubMarkdownPalette + MarkdownRenderer 色彩/字号高保真对齐
   file_path: Sources/PeekyKit/MarkdownRenderer.swift
   functions:
-    - name: GitHubMarkdownPalette (新增 enum/struct 命名空间)
-      inputs: [effectiveAppearance: NSAppearance]
-      outputs: 一组语义化 NSColor（text/link/inlineCodeBg/codeBlockBg/quoteText/border/tableZebra/headingRule/canvas）
+    - name: GitHubMarkdownPalette (新增 internal enum 命名空间，色彩单一真相)
+      inputs: []
+      outputs: 一组语义化「动态 NSColor」（text/link/inlineCodeBg/codeBlockBg/quoteText/border/tableZebra/headingRule/canvas）
       behavioral_contract: |
-        按 effectiveAppearance 是否为 dark 变体，返回上表 light 或 dark 精确色值。
-        以固定十六进制构造 NSColor（含 alpha），不再走系统自适应色。
+        每个语义色以 NSColor(name:dynamicProvider:) 构造为动态色：dark 外观解析为上表 dark 精确
+        十六进制（含 alpha）、其余外观解析为 light 精确十六进制。render(_:) 签名不变，单次渲染的
+        attributedText 在浅/深两外观下各自正确解析、无需重渲染。T3/T4 消费同一 palette。
       error_cases:
-        - { condition: "未知/混合外观", behavior: "按 aqua(light) 兜底" }
+        - { condition: "未知/混合外观", behavior: "解析为 light 兜底" }
     - name: bodyAttributes / headingAttributes / quoteAttributes / listAttributes / codeBlockAttributes / inlineCodeAttributes / linkAttributes / 表格样式 helper / hr
       inputs: [depth/level/appearance 依既有签名]
       outputs: 依既有签名的属性字典，颜色改取自 GitHubMarkdownPalette，字号/间距校正到几何目标
@@ -126,7 +127,7 @@
         纯 ⌘C 仍由 NSTextView 原生 copy: 处理（复制选区），不被菜单快捷键抢占。
       error_cases:
         - { condition: "选区为空", behavior: "回落 copyAllText 语义" }
-  dependencies: []
+  dependencies: [T1]
   reuse_candidates: |
     复用既有 copyMenu 结构与 copyAllText；复用 applyEditorTheme 的 appearance 切换骨架；
     modeControl 既有 for-markdown 标签逻辑（:1048-1049）改为隐藏。
@@ -155,17 +156,16 @@
 ## Dependency Graph
 
 ```
-T1 (MarkdownRenderer)  ─────┐
-T2 (PreviewRenderer)        │ (独立文件, 互不依赖)
-T3 (PreviewWindowController)┘
-T1 ──▶ T4 (DropContainerView, 需 palette 色值)
+T1 (MarkdownRenderer, 定义 GitHubMarkdownPalette) ─┬─▶ T3 (PreviewWindowController, 用 palette.canvas)
+                                                   └─▶ T4 (DropContainerView, 用 palette 代码/行内码色)
+T2 (PreviewRenderer) — 独立
 ```
-无环（DAG）。
+无环（DAG）。T3/T4 均消费 T1 定义的 palette，故排在 T1 之后。
 
 ## Execution Waves
 
-- **Wave 1（并行，文件互不相同）**：T1 · T2 · T3
-- **Wave 2**：T4（deps: T1）
+- **Wave 1（并行，文件互不相同）**：T1 · T2
+- **Wave 2（并行，文件互不相同，均 deps T1 的 palette）**：T3 · T4
 
 各波内同文件不并行（四个单元分属四个不同文件，天然满足）。
 
