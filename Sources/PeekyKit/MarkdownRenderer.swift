@@ -33,6 +33,12 @@ enum MarkdownRenderer {
     /// fill driven by `codeBlockBackgroundAttributeKey`.
     static let inlineCodeBackgroundAttributeKey = NSAttributedString.Key("peeky.inlineCodeBackground")
 
+    /// Marks an h1/h2 heading's runs so a later UI layer draws a full-content-
+    /// width 1px bottom rule (GitHub `border-bottom`) in the spacing gap below
+    /// the heading text, rather than a glyph-hugging underline that sits tight
+    /// against the letters and spans only the glyph width.
+    static let headingBottomRuleAttributeKey = NSAttributedString.Key("peeky.headingBottomRule")
+
     /// swift-markdown only attaches the `table`/`strikethrough`/`tasklist`
     /// cmark-gfm syntax extensions (see `CommonMarkConverter.swift`); GFM's
     /// bare-URL "autolink" extension is not wired up, so plain `Text` nodes
@@ -189,7 +195,9 @@ enum MarkdownRenderer {
         // symmetric 16/16 split would produce between two ordinary body
         // paragraphs.
         paragraph.paragraphSpacingBefore = 8
-        paragraph.paragraphSpacing = 16
+        // h1/h2 尾侧多留空间容纳「文字下方留白 + 整列宽底边线 + 到下方内容的
+        // 间距」；底边线由 CodeBlockBackgroundLayoutManager 画在这段间隙里。
+        paragraph.paragraphSpacing = level <= 2 ? 24 : 16
 
         var attributes: [NSAttributedString.Key: Any] = [
             .font: boldFont(size: headingFontSize(level: level)),
@@ -197,12 +205,11 @@ enum MarkdownRenderer {
             .paragraphStyle: paragraph
         ]
 
-        // h1/h2 GitHub 观感的底边线：文字级 underline（只沿标题字符本身的
-        // glyph 宽度绘制，短标题下线会短于内容列宽，但不会导致 TextKit1 下
-        // 独立 NSTextBlock 挂普通段落时的内容宽度塌缩/逐字竖排问题）。
+        // h1/h2 的 GitHub `border-bottom`：仅标记该段，由 layout manager 在标题
+        // 文字下方的留白处画一条整列宽 1px 细线（palette.headingRule），与文字
+        // 拉开距离——而非贴字形、仅字宽的 glyph 下划线。
         if level <= 2 {
-            attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-            attributes[.underlineColor] = GitHubMarkdownPalette.headingRule
+            attributes[headingBottomRuleAttributeKey] = true
         }
 
         return attributes
@@ -301,7 +308,7 @@ enum MarkdownRenderer {
     fileprivate static func inlineCodeAttributes(baseAttributes: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
         var attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 13.6, weight: .regular),
-            .foregroundColor: inlineCodeForegroundColor(),
+            .foregroundColor: GitHubMarkdownPalette.text,
             .backgroundColor: GitHubMarkdownPalette.inlineCodeBackground,
             inlineCodeBackgroundAttributeKey: true
         ]
@@ -386,21 +393,6 @@ enum MarkdownRenderer {
             let a = hasAlpha ? CGFloat(scanned & 0xFF) / 255.0 : 1.0
             return NSColor(srgbRed: r, green: g, blue: b, alpha: a)
         }
-    }
-
-    private static func inlineCodeForegroundColor() -> NSColor {
-        let darkPink = resolvedColor(.systemPink, for: .darkAqua)
-        return adaptiveColor(
-            light: resolvedColor(.systemPink, for: .aqua),
-            dark: darkPink.blended(withFraction: 0.25, of: .white) ?? darkPink
-        )
-    }
-
-    fileprivate static func tableHeaderBackgroundColor() -> NSColor {
-        adaptiveColor(
-            light: blendedColor(.controlBackgroundColor, with: .controlAccentColor, fraction: 0.18, for: .aqua),
-            dark: blendedColor(.controlBackgroundColor, with: .controlAccentColor, fraction: 0.18, for: .darkAqua)
-        )
     }
 
     // MARK: - Tables
@@ -492,12 +484,12 @@ enum MarkdownRenderer {
         block.setWidth(1, type: .absoluteValueType, for: .border)
         block.setBorderColor(GitHubMarkdownPalette.border)
 
-        if isHeader {
-            block.backgroundColor = tableHeaderBackgroundColor()
-        } else if isZebraStripe {
+        // github 表头无特殊填充（仅加粗），表头与普通行同用 canvas 底色；
+        // 偶数体行（tr:nth-child(2n)）用斑马色。
+        if isZebraStripe {
             block.backgroundColor = GitHubMarkdownPalette.tableZebra
         } else {
-            block.backgroundColor = NSColor.textBackgroundColor
+            block.backgroundColor = GitHubMarkdownPalette.canvas
         }
 
         return block
@@ -541,7 +533,7 @@ enum MarkdownRenderer {
     ) -> [NSAttributedString.Key: Any] {
         [
             .font: isHeader ? tableHeaderFont() : bodyFont(),
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: GitHubMarkdownPalette.text,
             .paragraphStyle: paragraphStyle
         ]
     }
@@ -721,6 +713,12 @@ private final class MarkdownAttributedVisitor: MarkupVisitor {
             let number = listContextStack[lastIndex].nextNumber
             listContextStack[lastIndex].nextNumber += 1
             marker = "\(number)."
+            // 等宽数字（tabular figures）：不同数字宽度一致，右对齐悬挂时 "1."/"2."
+            // 左右缘都对齐，消除比例数字（"1" 窄于 "2"）造成的左缘参差。
+            markerAttributes[.font] = NSFont.monospacedDigitSystemFont(
+                ofSize: MarkdownRenderer.bodyFont().pointSize,
+                weight: .regular
+            )
         } else {
             switch depth {
             case 0: marker = "\u{25CF}"
@@ -827,7 +825,9 @@ private final class MarkdownAttributedVisitor: MarkupVisitor {
 
     func visitEmphasis(_ emphasis: Emphasis) {
         pushDerivedAttributes { attributes in
-            attributes[.font] = MarkdownRenderer.italicFont(from: attributes[.font] as? NSFont)
+            // 中文无 italic 字形、NSFontManager 转不出倾斜；用 obliqueness 合成
+            // 剪切倾斜，对拉丁与 CJK 都可见地倾斜（浏览器对 CJK 斜体亦如此合成）。
+            attributes[.obliqueness] = 0.2
         }
         for child in emphasis.inlineChildren {
             visit(child)

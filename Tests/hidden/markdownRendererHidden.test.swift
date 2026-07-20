@@ -170,7 +170,9 @@ struct Hidden_markdownRenderer {
 
     @Test("heading's visible spacing above (previous paragraph's paragraphSpacing + heading's paragraphSpacingBefore) exceeds its visible spacing below (heading's paragraphSpacing + next paragraph's paragraphSpacingBefore), under the single-sided no-double-count spacing model")
     func test_markdownRenderer_headingVisibleSpacingExceedsAfter() throws {
-        let markdown = "Intro paragraph.\n\n# A Heading\n\nBody paragraph."
+        // 用 h3：无底边线，保留「上多下少、组随后文」节奏。h1/h2 现带整列宽
+        // 底边线（分节分隔），下方留白更大以容纳留白+线+margin，不适用此不变量。
+        let markdown = "Intro paragraph.\n\n### A Heading\n\nBody paragraph."
         let text = MarkdownRenderer.render(markdown)
 
         guard let introLoc = location(of: "Intro paragraph.", in: text),
@@ -801,23 +803,17 @@ struct Hidden_markdownRenderer {
     }
 
     @Test(
-        "h1 and h2 headings carry a non-zero underlineStyle whose underlineColor matches the GitHub Primer border-bottom target, in both appearances",
-        arguments: [
-            (markdown: "# Heading One", appearanceName: "light", hex: "d1d9e0b3"),
-            (markdown: "# Heading One", appearanceName: "dark", hex: "3d444db3"),
-            (markdown: "## Heading Two", appearanceName: "light", hex: "d1d9e0b3"),
-            (markdown: "## Heading Two", appearanceName: "dark", hex: "3d444db3"),
-        ]
+        "h1/h2 headings carry the bottom-rule marker (GitHub border-bottom drawn below the text), not a glyph underline",
+        arguments: ["# Heading One", "## Heading Two"]
     )
-    func test_markdownRenderer_headingUnderlineColorMatchesGithubTarget(_ testCase: (markdown: String, appearanceName: String, hex: String)) throws {
-        let text = MarkdownRenderer.render(testCase.markdown)
+    func test_markdownRenderer_h1h2CarryBottomRuleMarker(_ markdown: String) throws {
+        let text = MarkdownRenderer.render(markdown)
         let attrs = attributes(of: text, at: 0)
-        #expect(underlineStyleValue(attrs) != 0, "\(testCase.markdown) should carry a non-zero underlineStyle")
-        try expectColorMatches(underlineColor(attrs), hex: testCase.hex, appearanceName: testCase.appearanceName)
+        #expect(attrs[MarkdownRenderer.headingBottomRuleAttributeKey] as? Bool == true, "\(markdown) 应携带 headingBottomRuleAttributeKey")
     }
 
     @Test(
-        "headings h3 through h6 do not carry an underlineColor attribute (only h1 and h2 get the GitHub border-bottom treatment)",
+        "headings h3 through h6 do not carry the bottom-rule marker (only h1 and h2 get the GitHub border-bottom)",
         arguments: [
             "### Heading Three",
             "#### Heading Four",
@@ -825,9 +821,84 @@ struct Hidden_markdownRenderer {
             "###### Heading Six",
         ]
     )
-    func test_markdownRenderer_headingsH3ThroughH6HaveNoUnderlineColor(markdown: String) throws {
+    func test_markdownRenderer_headingsH3ThroughH6HaveNoBottomRuleMarker(markdown: String) throws {
         let text = MarkdownRenderer.render(markdown)
         let attrs = attributes(of: text, at: 0)
-        #expect(underlineColor(attrs) == nil, "\(markdown) should not carry an underlineColor attribute")
+        #expect(attrs[MarkdownRenderer.headingBottomRuleAttributeKey] == nil, "\(markdown) 不应携带 headingBottomRuleAttributeKey")
+    }
+
+    // MARK: - R3 修复轮：palette 全色钉值 + 斜体倾斜 + 行内码色 + 表格色
+
+    @Test(
+        "GitHubMarkdownPalette 9 个语义色在浅/深两外观下各自解析到 github-markdown-css 精确 hex",
+        arguments: [
+            (name: "text", light: "1f2328", dark: "f0f6fc"),
+            (name: "link", light: "0969da", dark: "4493f8"),
+            (name: "quoteText", light: "59636e", dark: "9198a1"),
+            (name: "headingRule", light: "d1d9e0b3", dark: "3d444db3"),
+            (name: "inlineCodeBackground", light: "818b981f", dark: "656c7633"),
+            (name: "codeBlockBackground", light: "f6f8fa", dark: "151b23"),
+            (name: "border", light: "d1d9e0", dark: "3d444d"),
+            (name: "tableZebra", light: "f6f8fa", dark: "151b23"),
+            (name: "canvas", light: "ffffff", dark: "0d1117"),
+        ]
+    )
+    func test_markdownRenderer_paletteColorsMatchGithubTargets(_ tc: (name: String, light: String, dark: String)) throws {
+        let palette = MarkdownRenderer.GitHubMarkdownPalette.self
+        let color: NSColor
+        switch tc.name {
+        case "text": color = palette.text
+        case "link": color = palette.link
+        case "quoteText": color = palette.quoteText
+        case "headingRule": color = palette.headingRule
+        case "inlineCodeBackground": color = palette.inlineCodeBackground
+        case "codeBlockBackground": color = palette.codeBlockBackground
+        case "border": color = palette.border
+        case "tableZebra": color = palette.tableZebra
+        case "canvas": color = palette.canvas
+        default:
+            Issue.record("未知语义色 \(tc.name)")
+            return
+        }
+        try expectColorMatches(color, hex: tc.light, appearanceName: "light")
+        try expectColorMatches(color, hex: tc.dark, appearanceName: "dark")
+    }
+
+    @Test("emphasis 文本携带正 obliqueness，使拉丁与 CJK 都可见地倾斜")
+    func test_markdownRenderer_emphasisHasObliqueness() throws {
+        let text = MarkdownRenderer.render("正文 *斜体 italic* 收尾")
+        let loc = try #require(location(of: "斜体", in: text))
+        let value = try #require((attributes(of: text, at: loc)[.obliqueness] as? NSNumber)?.doubleValue)
+        #expect(value > 0.05, "emphasis 应有正倾斜量，实际 \(value)")
+    }
+
+    @Test(
+        "行内码文字用 github 正文色（非红/粉），浅/深两外观",
+        arguments: [
+            (appearanceName: "light", hex: "1f2328"),
+            (appearanceName: "dark", hex: "f0f6fc"),
+        ]
+    )
+    func test_markdownRenderer_inlineCodeForegroundMatchesBodyText(_ tc: (appearanceName: String, hex: String)) throws {
+        let text = MarkdownRenderer.render("Some `codeSpan` here.")
+        let loc = try #require(location(of: "codeSpan", in: text))
+        try expectColorMatches(foregroundColor(attributes(of: text, at: loc)), hex: tc.hex, appearanceName: tc.appearanceName)
+    }
+
+    @Test("表格：单元文字用正文色；表头/普通行用 canvas 底、偶数体行用斑马底（浅色核对）")
+    func test_markdownRenderer_tableCellColorsWiredToPalette() throws {
+        let markdown = "| A | B |\n| --- | --- |\n| c1 | c2 |\n| d1 | d2 |"
+        let text = MarkdownRenderer.render(markdown)
+
+        let headerLoc = try #require(location(of: "A", in: text))
+        let headerAttrs = attributes(of: text, at: headerLoc)
+        try expectColorMatches(foregroundColor(headerAttrs), hex: "1f2328", appearanceName: "light")
+        let headerBlock = try #require(paragraphStyle(headerAttrs)?.textBlocks.first as? NSTextTableBlock)
+        try expectColorMatches(headerBlock.backgroundColor, hex: "ffffff", appearanceName: "light")
+
+        // 行序：header=0、c 行=1（canvas）、d 行=2（斑马）。
+        let zebraLoc = try #require(location(of: "d1", in: text))
+        let zebraBlock = try #require(paragraphStyle(attributes(of: text, at: zebraLoc))?.textBlocks.first as? NSTextTableBlock)
+        try expectColorMatches(zebraBlock.backgroundColor, hex: "f6f8fa", appearanceName: "light")
     }
 }

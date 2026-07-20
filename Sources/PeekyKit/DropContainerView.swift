@@ -277,6 +277,40 @@ final class CodeBlockBackgroundLayoutManager: NSLayoutManager {
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         currentBackgroundOrigin = origin
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+        drawHeadingBottomRules(forGlyphRange: glyphsToShow, at: origin)
+    }
+
+    /// h1/h2 的 GitHub `border-bottom`：在标题文字下方的段间距留白处画一条整列宽
+    /// 1px 细线（palette.headingRule），与文字拉开距离——对标 github-markdown-css
+    /// h1/h2 的 padding-bottom + border-bottom，而非贴字形、仅字宽的 glyph 下划线。
+    private func drawHeadingBottomRules(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        guard
+            let storage = textStorage,
+            let container = textContainer(forGlyphAt: glyphsToShow.location, effectiveRange: nil)
+        else { return }
+
+        let charRange = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        guard charRange.length > 0 else { return }
+
+        let padding = container.lineFragmentPadding
+        let ruleColor = resolvedBackgroundColor(MarkdownRenderer.GitHubMarkdownPalette.headingRule)
+
+        storage.enumerateAttribute(MarkdownRenderer.headingBottomRuleAttributeKey, in: charRange) { value, range, _ in
+            guard (value as? Bool) == true, range.length > 0 else { return }
+            let glyphRange = self.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            guard glyphRange.length > 0 else { return }
+
+            let lastGlyph = NSMaxRange(glyphRange) - 1
+            let lineRect = self.lineFragmentRect(forGlyphAt: lastGlyph, effectiveRange: nil)
+            let ruleRect = NSRect(
+                x: origin.x + padding,
+                y: origin.y + lineRect.maxY + 6,
+                width: max(container.size.width - padding * 2, 0),
+                height: 1
+            )
+            ruleColor.setFill()
+            ruleRect.fill()
+        }
     }
 
     override func fillBackgroundRectArray(
@@ -308,12 +342,19 @@ final class CodeBlockBackgroundLayoutManager: NSLayoutManager {
 
             resolvedBackgroundColor(color).setFill()
 
+            // 累积整块的行片段并集，作为一块 6px 圆角矩形填充（对标 github 代码块
+            // border-radius: 6px），而非逐行方角填充。
+            var unionRect = NSRect.null
             var glyphIndex = glyphRange.location
             while glyphIndex < NSMaxRange(glyphRange) {
                 var lineGlyphRange = NSRange()
                 let lineRect = lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: &lineGlyphRange)
-                lineRect.offsetBy(dx: currentBackgroundOrigin.x, dy: currentBackgroundOrigin.y).fill()
+                unionRect = unionRect.union(lineRect)
                 glyphIndex = NSMaxRange(lineGlyphRange)
+            }
+            if !unionRect.isNull {
+                let blockRect = unionRect.offsetBy(dx: currentBackgroundOrigin.x, dy: currentBackgroundOrigin.y)
+                NSBezierPath(roundedRect: blockRect, xRadius: 6, yRadius: 6).fill()
             }
             return
         }

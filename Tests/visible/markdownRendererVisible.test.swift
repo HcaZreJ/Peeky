@@ -245,18 +245,12 @@ struct Visible_markdownRenderer {
     }
 
     @Test(
-        "h1 and h2 headings carry an underline whose color matches the GitHub Primer border target in both light and dark appearance",
-        arguments: [
-            (markdown: "# Heading One", appearanceName: "light", hex: "d1d9e0b3"),
-            (markdown: "# Heading One", appearanceName: "dark", hex: "3d444db3"),
-            (markdown: "## Heading Two", appearanceName: "light", hex: "d1d9e0b3"),
-            (markdown: "## Heading Two", appearanceName: "dark", hex: "3d444db3"),
-        ]
+        "h1/h2 headings carry the bottom-rule marker (GitHub border-bottom drawn as a full-width rule below the text), not a glyph underline",
+        arguments: ["# Heading One", "## Heading Two"]
     )
-    func test_markdownRenderer_h1h2UnderlineColorMatchesGithubTarget(_ testCase: (markdown: String, appearanceName: String, hex: String)) throws {
-        let text = MarkdownRenderer.render(testCase.markdown)
+    func test_markdownRenderer_h1h2CarryBottomRuleMarker(_ markdown: String) throws {
+        let text = MarkdownRenderer.render(markdown)
         let attrs = attributes(of: text, at: 0)
-        #expect(underlineStyleValue(attrs) != 0, "\(testCase.markdown) should carry a non-zero underlineStyle")
-        try expectColorMatches(underlineColor(attrs), hex: testCase.hex, appearanceName: testCase.appearanceName)
+        #expect(attrs[MarkdownRenderer.headingBottomRuleAttributeKey] as? Bool == true, "\(markdown) 应携带 headingBottomRuleAttributeKey")
     }
 }
