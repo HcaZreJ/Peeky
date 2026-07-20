@@ -157,7 +157,7 @@ enum MarkdownRenderer {
 
         return [
             .font: bodyFont(),
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: GitHubMarkdownPalette.text,
             .paragraphStyle: paragraph
         ]
     }
@@ -167,7 +167,9 @@ enum MarkdownRenderer {
         case 1: return 32
         case 2: return 24
         case 3: return 20
-        default: return 16
+        case 4: return 16
+        case 5: return 14
+        default: return 13.6
         }
     }
 
@@ -191,7 +193,7 @@ enum MarkdownRenderer {
 
         var attributes: [NSAttributedString.Key: Any] = [
             .font: boldFont(size: headingFontSize(level: level)),
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: GitHubMarkdownPalette.text,
             .paragraphStyle: paragraph
         ]
 
@@ -200,7 +202,7 @@ enum MarkdownRenderer {
         // 独立 NSTextBlock 挂普通段落时的内容宽度塌缩/逐字竖排问题）。
         if level <= 2 {
             attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
-            attributes[.underlineColor] = NSColor.separatorColor
+            attributes[.underlineColor] = GitHubMarkdownPalette.headingRule
         }
 
         return attributes
@@ -217,7 +219,7 @@ enum MarkdownRenderer {
 
         return [
             .font: bodyFont(),
-            .foregroundColor: NSColor.secondaryLabelColor,
+            .foregroundColor: GitHubMarkdownPalette.quoteText,
             .paragraphStyle: paragraph
         ]
     }
@@ -245,7 +247,7 @@ enum MarkdownRenderer {
 
         return [
             .font: bodyFont(),
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: GitHubMarkdownPalette.text,
             .paragraphStyle: paragraph
         ]
     }
@@ -277,7 +279,7 @@ enum MarkdownRenderer {
         return [
             .font: NSFont.monospacedSystemFont(ofSize: 13.6, weight: .regular),
             .foregroundColor: NSColor.labelColor,
-            .backgroundColor: codeBlockBackgroundColor(),
+            .backgroundColor: GitHubMarkdownPalette.codeBlockBackground,
             .paragraphStyle: paragraph,
             codeBlockBackgroundAttributeKey: true
         ]
@@ -300,7 +302,7 @@ enum MarkdownRenderer {
         var attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 13.6, weight: .regular),
             .foregroundColor: inlineCodeForegroundColor(),
-            .backgroundColor: inlineCodeBackgroundColor(),
+            .backgroundColor: GitHubMarkdownPalette.inlineCodeBackground,
             inlineCodeBackgroundAttributeKey: true
         ]
 
@@ -320,7 +322,7 @@ enum MarkdownRenderer {
             .font: NSFont.systemFont(ofSize: 1),
             .foregroundColor: NSColor.clear,
             .underlineStyle: NSUnderlineStyle.single.rawValue,
-            .underlineColor: NSColor.separatorColor,
+            .underlineColor: GitHubMarkdownPalette.border,
             .paragraphStyle: paragraph
         ]
     }
@@ -357,18 +359,33 @@ enum MarkdownRenderer {
         }
     }
 
-    private static func codeBlockBackgroundColor() -> NSColor {
-        adaptiveColor(
-            light: blendedColor(.textBackgroundColor, with: .systemBlue, fraction: 0.08, for: .aqua),
-            dark: blendedColor(.textBackgroundColor, with: .systemBlue, fraction: 0.08, for: .darkAqua)
-        )
-    }
+    /// github-markdown-css 语义色单一真相：每个语义只维护一对 GitHub Primer
+    /// 固定十六进制字面量（浅色/深色），照 `adaptiveColor(light:dark:)` 既有
+    /// 写法转成随外观切换重新取值的 NSColor，供渲染各处按语义取用，避免各处
+    /// 各写一份系统色混合逻辑。
+    enum GitHubMarkdownPalette {
+        static let text = MarkdownRenderer.adaptiveColor(light: hex("1f2328"), dark: hex("f0f6fc"))
+        static let link = MarkdownRenderer.adaptiveColor(light: hex("0969da"), dark: hex("4493f8"))
+        static let quoteText = MarkdownRenderer.adaptiveColor(light: hex("59636e"), dark: hex("9198a1"))
+        static let headingRule = MarkdownRenderer.adaptiveColor(light: hex("d1d9e0b3"), dark: hex("3d444db3"))
+        static let inlineCodeBackground = MarkdownRenderer.adaptiveColor(light: hex("818b981f"), dark: hex("656c7633"))
+        static let codeBlockBackground = MarkdownRenderer.adaptiveColor(light: hex("f6f8fa"), dark: hex("151b23"))
+        static let border = MarkdownRenderer.adaptiveColor(light: hex("d1d9e0"), dark: hex("3d444d"))
+        static let tableZebra = MarkdownRenderer.adaptiveColor(light: hex("f6f8fa"), dark: hex("151b23"))
+        static let canvas = MarkdownRenderer.adaptiveColor(light: hex("ffffff"), dark: hex("0d1117"))
 
-    private static func inlineCodeBackgroundColor() -> NSColor {
-        adaptiveColor(
-            light: blendedColor(.textBackgroundColor, with: .systemPink, fraction: 0.08, for: .aqua),
-            dark: blendedColor(.textBackgroundColor, with: .systemPink, fraction: 0.08, for: .darkAqua)
-        )
+        /// 解析 `RRGGBB` / `RRGGBBAA`（末两位=alpha）固定十六进制字面量为具体
+        /// sRGB NSColor，是上面每个语义色 light/dark 两侧的字面量来源。
+        private static func hex(_ value: String) -> NSColor {
+            var scanned: UInt64 = 0
+            Scanner(string: value).scanHexInt64(&scanned)
+            let hasAlpha = value.count == 8
+            let r = CGFloat((scanned >> (hasAlpha ? 24 : 16)) & 0xFF) / 255.0
+            let g = CGFloat((scanned >> (hasAlpha ? 16 : 8)) & 0xFF) / 255.0
+            let b = CGFloat((scanned >> (hasAlpha ? 8 : 0)) & 0xFF) / 255.0
+            let a = hasAlpha ? CGFloat(scanned & 0xFF) / 255.0 : 1.0
+            return NSColor(srgbRed: r, green: g, blue: b, alpha: a)
+        }
     }
 
     private static func inlineCodeForegroundColor() -> NSColor {
@@ -383,13 +400,6 @@ enum MarkdownRenderer {
         adaptiveColor(
             light: blendedColor(.controlBackgroundColor, with: .controlAccentColor, fraction: 0.18, for: .aqua),
             dark: blendedColor(.controlBackgroundColor, with: .controlAccentColor, fraction: 0.18, for: .darkAqua)
-        )
-    }
-
-    fileprivate static func tableZebraBackgroundColor() -> NSColor {
-        adaptiveColor(
-            light: blendedColor(.textBackgroundColor, with: .labelColor, fraction: 0.035, for: .aqua),
-            dark: blendedColor(.textBackgroundColor, with: .labelColor, fraction: 0.035, for: .darkAqua)
         )
     }
 
@@ -480,12 +490,12 @@ enum MarkdownRenderer {
         block.setContentWidth(widthPercentage, type: .percentageValueType)
         block.setWidth(8, type: .absoluteValueType, for: .padding)
         block.setWidth(1, type: .absoluteValueType, for: .border)
-        block.setBorderColor(NSColor.separatorColor.withAlphaComponent(0.45))
+        block.setBorderColor(GitHubMarkdownPalette.border)
 
         if isHeader {
             block.backgroundColor = tableHeaderBackgroundColor()
         } else if isZebraStripe {
-            block.backgroundColor = tableZebraBackgroundColor()
+            block.backgroundColor = GitHubMarkdownPalette.tableZebra
         } else {
             block.backgroundColor = NSColor.textBackgroundColor
         }
@@ -854,7 +864,7 @@ private final class MarkdownAttributedVisitor: MarkupVisitor {
         }
 
         pushDerivedAttributes { attributes in
-            attributes[.foregroundColor] = NSColor.linkColor
+            attributes[.foregroundColor] = MarkdownRenderer.GitHubMarkdownPalette.link
             attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
             attributes[.link] = URL(string: destination) ?? destination
         }
@@ -983,7 +993,7 @@ private final class MarkdownAttributedVisitor: MarkupVisitor {
 
             let linkText = nsString.substring(with: match.range)
             var linkAttributes = attributes
-            linkAttributes[.foregroundColor] = NSColor.linkColor
+            linkAttributes[.foregroundColor] = MarkdownRenderer.GitHubMarkdownPalette.link
             linkAttributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
             if let url = match.url {
                 linkAttributes[.link] = url
