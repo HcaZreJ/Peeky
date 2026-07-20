@@ -809,10 +809,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         textView.allowsUndo = false
         textView.drawsBackground = true
         textView.backgroundColor = .textBackgroundColor
-        // 大纲跳转 / peeky:// 行定位会用 setSelectedRange 选中整行做定位反馈；
-        // 未聚焦时 AppKit 默认用非强调灰色高亮整行，深色模式下在标题行上格外
-        // 显眼，故关闭选中背景色，只保留滚动定位本身。
-        textView.selectedTextAttributes = [.backgroundColor: NSColor.clear]
+        // 大纲跳转 / peeky:// 行定位改用 showFindIndicator 做瞬时闪烁反馈（自动淡出、
+        // 不占用选区），与用户拖拽选区完全解耦，故这里保留系统默认的可见选区高亮色。
+        textView.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
         textView.textContainerInset = NSSize(width: 18, height: 16)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
@@ -1046,7 +1045,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     ) {
         modeControl.selectedSegment = mode.rawValue
         modeControl.isEnabled = document.kind.hasFormattedPreview
-        modeControl.setLabel(document.kind == .markdown ? "Preview" : "Format", forSegment: 0)
+        modeControl.setLabel("Format", forSegment: 0)
+        modeControl.isHidden = document.kind == .markdown
 
         let canFoldJSON = (document.kind == .json || document.kind == .jsonl) && mode == .formatted
         foldButton.isEnabled = canFoldJSON
@@ -1062,7 +1062,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         )
         textView.textStorage?.setAttributedString(rendered.attributedText)
         applyDisplayMetadata(rendered.display)
-        applyEditorTheme(usesDarkModern: rendered.usesDarkModernTheme)
+        applyEditorTheme(usesDarkModern: rendered.usesDarkModernTheme, isMarkdown: document.kind == .markdown)
         if let language = rendered.highlightLanguage {
             startHighlighting(text: document.text, language: language, tabID: tabID)
         }
@@ -1121,6 +1121,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         titleLabel.stringValue = url.lastPathComponent
         metaLabel.stringValue = "Open failed"
         modeControl.isEnabled = false
+        modeControl.isHidden = false
         jsonViewToggle.isHidden = true
         foldButton.isEnabled = false
         foldButton.state = .off
@@ -1230,13 +1231,22 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// 编辑器区（scrollView + textView + gutterView）整体切 Dark Modern 外观：显式覆盖
     /// appearance 让 indent guides/record 注解等既有动态系统色（DropTextView 内绘制）
-    /// 也随之解析为深色变体；背景/gutter 精确色值另见 DarkModernTheme。
-    private func applyEditorTheme(usesDarkModern: Bool) {
+    /// 也随之解析为深色变体；背景/gutter 精确色值另见 DarkModernTheme。markdown 恒不用
+    /// Dark Modern（usesDarkModern=false），画布背景改取 GitHubMarkdownPalette.canvas
+    /// （随 effectiveAppearance 动态解析 light/dark），比系统 .textBackgroundColor 更贴近
+    /// github 渲染观感；其它 usesDarkModern=false 路径（非 markdown/空态/错误态）不变。
+    private func applyEditorTheme(usesDarkModern: Bool, isMarkdown: Bool = false) {
         let appearance = usesDarkModern ? NSAppearance(named: .darkAqua) : nil
         scrollView.appearance = appearance
         textView.appearance = appearance
         gutterView.appearance = appearance
-        textView.backgroundColor = usesDarkModern ? DarkModernTheme.background : .textBackgroundColor
+        if usesDarkModern {
+            textView.backgroundColor = DarkModernTheme.background
+        } else if isMarkdown {
+            textView.backgroundColor = MarkdownRenderer.GitHubMarkdownPalette.canvas
+        } else {
+            textView.backgroundColor = .textBackgroundColor
+        }
         gutterView.usesDarkModernTheme = usesDarkModern
     }
 
@@ -1421,8 +1431,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
                 self.scrollToLine(targetLine)
             } else {
                 let topRange = NSRange(location: 0, length: 0)
-                self.textView.setSelectedRange(topRange)
                 self.textView.scrollRangeToVisible(topRange)
+                self.textView.showFindIndicator(for: topRange)
                 self.gutterView.needsDisplay = true
             }
         }
@@ -1435,8 +1445,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         let location = characterOffset(forLine: line, in: text)
         let lineRange = text.lineRange(for: NSRange(location: location, length: 0))
         textView.layoutManager?.ensureLayout(forCharacterRange: lineRange)
-        textView.setSelectedRange(lineRange)
         textView.scrollRangeToVisible(lineRange)
+        textView.showFindIndicator(for: lineRange)
         gutterView.needsDisplay = true
     }
 
@@ -1466,8 +1476,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             let layoutManager = textView.layoutManager,
             let textContainer = textView.textContainer
         else {
-            textView.setSelectedRange(lineRange)
             textView.scrollRangeToVisible(lineRange)
+            textView.showFindIndicator(for: lineRange)
             gutterView.needsDisplay = true
             return
         }
@@ -1487,7 +1497,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         clipView.scroll(to: NSPoint(x: 0, y: clampedY))
         scrollView.reflectScrolledClipView(clipView)
 
-        textView.setSelectedRange(lineRange)
+        textView.showFindIndicator(for: lineRange)
         gutterView.needsDisplay = true
     }
 
@@ -1498,8 +1508,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         let safeLocation = min(max(location, 0), text.length)
         let lineRange = text.lineRange(for: NSRange(location: safeLocation, length: 0))
         textView.layoutManager?.ensureLayout(forCharacterRange: lineRange)
-        textView.setSelectedRange(lineRange)
         textView.scrollRangeToVisible(lineRange)
+        textView.showFindIndicator(for: lineRange)
         gutterView.needsDisplay = true
     }
 
@@ -1533,6 +1543,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         jsonOutlineView.isHidden = true
         jsonOutlineView.reset()
         modeControl.isEnabled = false
+        modeControl.isHidden = false
         jsonViewToggle.isHidden = true
         foldButton.isEnabled = false
         foldButton.state = .off
@@ -1689,6 +1700,16 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         copyAllItem.target = self
         copyMenu.addItem(copyAllItem)
 
+        // 无 keyEquivalent：纯 ⌘C 留给 NSTextView 原生 copy:（复制选区），
+        // 此菜单项只作为可发现入口，行为与原生 ⌘C 一致（含空选区回落全文）。
+        let copySelectionItem = NSMenuItem(
+            title: "Copy Selection",
+            action: #selector(copySelectionMenuAction(_:)),
+            keyEquivalent: ""
+        )
+        copySelectionItem.target = self
+        copyMenu.addItem(copySelectionItem)
+
         let copyAbsoluteItem = NSMenuItem(
             title: "Copy Absolute Path",
             action: #selector(copyAbsolutePathMenuAction(_:)),
@@ -1753,6 +1774,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         copyAllText()
     }
 
+    @objc private func copySelectionMenuAction(_ sender: Any?) {
+        copySelection()
+    }
+
     @objc private func copyAbsolutePathMenuAction(_ sender: Any?) {
         copyAbsolutePath()
     }
@@ -1778,6 +1803,22 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         guard let document = activeTab?.document else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(document.text, forType: .string)
+    }
+
+    /// 复制选中：选区非空复制选区文本，选区为空回落复制全文（copyAllText 同源语义）。
+    func copySelection() {
+        guard let document = activeTab?.document else { return }
+        let selectedRange = textView.selectedRange()
+        let selectedText = selectedRange.length > 0 ? (textView.string as NSString).substring(with: selectedRange) : ""
+        let payload = Self.selectionCopyPayload(selected: selectedText, full: document.text)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(payload, forType: .string)
+    }
+
+    /// 选区非空取选区，选区为空回落全文；纯函数、无 MainActor 状态，标 nonisolated
+    /// 便于任意上下文（含测试）同步调用，不依赖 NSTextView/NSPasteboard。
+    nonisolated static func selectionCopyPayload(selected: String, full: String) -> String {
+        selected.isEmpty ? full : selected
     }
 
     /// ② 复制绝对路径。
