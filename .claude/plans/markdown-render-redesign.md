@@ -178,4 +178,4 @@ T2 (PreviewRenderer) — 独立
 
 ## Status
 
-In Progress — 待用户批准 BACKLOG 后进入 test-first 派发。
+In Progress — T1/T2/T3 已实现并逐单元验收（全量 163/163 绿，.app 构建+codesign 干净无告警）。待用户对 markdown 观感做「好看」终审签字，并就两处可选精修拍板：① 表格普通行/表头背景（现为系统色）是否改取 palette.canvas；② 代码块方角是否改 6px 圆角。签字通过 → Completed。
