@@ -5,28 +5,20 @@
 Markdown 渲染重构：GFM · 高保真对齐 github-markdown-css（light+dark）· 单 Preview · 原生选中复制。
 验收含结构化测试全绿 + 用户对观感的「好看」终审签字。
 
-### Wave 1 — 无依赖 · 可并行（三文件互不相同）
+### Wave 1 — 已完成
+- [x] T1  GitHubMarkdownPalette + MarkdownRenderer 色彩/字号对齐   （hidden 41/41，50/50 全绿）
+- [x] T2  PreviewRenderer——markdown 恒 formatted   （hidden 15/15，18/18 全绿）
 
-- [ ] T1  GitHubMarkdownPalette + MarkdownRenderer 色彩/字号高保真对齐
-        file: Sources/PeekyKit/MarkdownRenderer.swift   deps: —
-        spec: 新增 GitHubMarkdownPalette(light+dark)；标题字号补 h5/h6、字重 600；
-              链接/行内码底/代码块底/引用文字·条/表格边框·斑马/hr/h1h2 底边线全取 palette 精确色
-        验收: light+dark 下各级结构化属性断言命中 github-markdown-css 目标值
+### Wave 2 — 进行中
+- [ ] T3  PreviewWindowController——单 Preview + 可见选区 + 复制选中 + github 画布
+        file: Sources/PeekyKit/PreviewWindowController.swift   deps: T1
+        spec: markdown 隐藏 Format/Raw 档；选区高亮改可见（github 选区色）；大纲/peeky:// 行定位
+              与选区解耦（导航改瞬时闪烁 showFindIndicator，不占选区、不再现失焦灰带）；
+              复制菜单加「复制选中」(纯逻辑 selectionCopyPayload：空选区回落全文)；
+              markdown 画布背景取 GitHubMarkdownPalette.canvas（浅 #ffffff / 深 #0d1117）
+        验收: 无 Format/Raw 档 + 拖拽选区可见可 ⌘C 复制 + 复制选中生效 + 导航不留灰带 +
+              浅/深画布色正确；按 DEVFLOW 手动验收清单两外观各过一遍 + 用户观感签字
 
-- [ ] T2  PreviewRenderer 收敛——markdown 恒 formatted
-        file: Sources/PeekyKit/PreviewRenderer.swift   deps: —
-        spec: markdown 分支恒 formatted（8MB 超限仍安全回落 raw 兜底）；markdown usesDarkModernTheme 恒 false
-        验收: 任意 mode 入参下 markdown 返回 formatted 富文本，tests 全绿
-
-- [ ] T3  PreviewWindowController——单 Preview + 可见选区 + 复制选中 + github 外观
-        file: Sources/PeekyKit/PreviewWindowController.swift   deps: —
-        spec: 选区高亮改可见；行定位改瞬时高亮（不占选区外观）；markdown 隐藏 Format/Raw 档；
-              复制菜单加「复制选中」(空选区回落全文)；依 appearance 应用 github light/dark 画布色
-        验收: 无 Format/Raw 档 + 选区可见 + 复制选中生效 + light/dark 画布色正确
-
-### Wave 2 — deps: T1
-
-- [ ] T4  DropContainerView——代码块/行内码背景填充保真
-        file: Sources/PeekyKit/DropContainerView.swift   deps: T1
-        spec: 块级代码背景取 palette.codeBlockBg 圆角 6；行内码胶囊取 palette.inlineCodeBg 圆角 6 紧致包裹
-        验收: light/dark 下代码块底/行内码胶囊与 palette 一致，tests + 观感通过
+### 暂缓（观感终审时定夺）
+- [ ] T4  代码块方角→6px 圆角（纯绘制细节）
+        note: 颜色已由 T1 覆盖、行内码圆角胶囊既有；此项风险/收益由用户看实机后拍板

@@ -150,7 +150,9 @@
         - { condition: "无背景 key 的 run", behavior: "不绘制" }
   dependencies: [T1]
   reuse_candidates: 复用现有 CodeBlockBackgroundLayoutManager 绘制管线；仅统一取色到 palette。
-  acceptance: 代码块底色/圆角、行内码胶囊在 light/dark 下与 palette 一致，tests + 观感通过。
+  acceptance: |
+    颜色已由 T1 达成（layout manager 消费 run 的 .backgroundColor = palette 色）；行内码圆角胶囊既有。
+    仅余「代码块方角→6px 圆角」纯绘制细节，暂缓至观感终审由用户拍板是否值得做。
 ```
 
 ## Dependency Graph
@@ -164,10 +166,10 @@ T2 (PreviewRenderer) — 独立
 
 ## Execution Waves
 
-- **Wave 1（并行，文件互不相同）**：T1 · T2
-- **Wave 2（并行，文件互不相同，均 deps T1 的 palette）**：T3 · T4
+- **Wave 1（并行，文件互不相同）**：T1 · T2 — 已完成
+- **Wave 2**：T3（deps T1 palette）。T4 的颜色已由 T1 顺带覆盖——`CodeBlockBackgroundLayoutManager` 直接以 run 的 `.backgroundColor` 为填充色，T1 已把代码块/行内码的 `.backgroundColor` 改为 palette 色，行内码圆角胶囊亦早已存在；T4 仅余「代码块方角→6px 圆角」一处纯绘制细节，其风险/收益由观感终审拍板，暂缓，不单独派发。
 
-各波内同文件不并行（四个单元分属四个不同文件，天然满足）。
+各波内同文件不并行（各单元分属不同文件，天然满足）。
 
 ## 验收模型
 
