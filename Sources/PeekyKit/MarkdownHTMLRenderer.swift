@@ -197,15 +197,18 @@ private final class MarkdownHTMLVisitor: MarkupVisitor {
 
     func visitOrderedList(_ orderedList: OrderedList) -> String {
         let items: String = orderedList.listItems.map { self.visit($0) }.joined()
+        let taskClass = orderedList.listItems.contains { $0.checkbox != nil } ? " class=\"contains-task-list\"" : ""
         if orderedList.startIndex != 1 {
-            return "<ol start=\"\(orderedList.startIndex)\">\(items)</ol>"
+            return "<ol\(taskClass) start=\"\(orderedList.startIndex)\">\(items)</ol>"
         }
-        return "<ol>\(items)</ol>"
+        return "<ol\(taskClass)>\(items)</ol>"
     }
 
     func visitUnorderedList(_ unorderedList: UnorderedList) -> String {
         let items: String = unorderedList.listItems.map { self.visit($0) }.joined()
-        return "<ul>\(items)</ul>"
+        // contains-task-list：github-markdown-css 据此调整任务列表的列表内边距。
+        let taskClass = unorderedList.listItems.contains { $0.checkbox != nil } ? " class=\"contains-task-list\"" : ""
+        return "<ul\(taskClass)>\(items)</ul>"
     }
 
     /// 普通列表项用无属性 `<li>`；段落子块不额外包 `<p>`（内容直接内联拼接），
@@ -222,7 +225,9 @@ private final class MarkdownHTMLVisitor: MarkupVisitor {
 
         if let checkbox = listItem.checkbox {
             let checkedAttribute = checkbox == .checked ? " checked" : ""
-            return "<li class=\"task-list-item\"><input type=\"checkbox\"\(checkedAttribute) disabled> \(content)</li>"
+            // task-list-item-checkbox：github-markdown-css 用它给勾选框加负左边距、
+            // 拉进列表左内边距，使内容与普通列表项左缘对齐（否则勾选框内联挤右）。
+            return "<li class=\"task-list-item\"><input type=\"checkbox\"\(checkedAttribute) disabled class=\"task-list-item-checkbox\"> \(content)</li>"
         }
 
         return "<li>\(content)</li>"

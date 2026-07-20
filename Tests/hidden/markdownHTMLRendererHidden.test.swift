@@ -153,9 +153,14 @@ struct Hidden_markdownHTMLRenderer {
     func test_renderHTML_taskListCheckedAndUncheckedStates() throws {
         let html = MarkdownHTMLRenderer.renderHTML("- [x] Done\n- [ ] Todo")
 
+        // 列表带 contains-task-list、勾选框带 task-list-item-checkbox（github-markdown-css
+        // 据此对齐缩进、把勾选框拉进左边距）。
+        #expect(html.contains("class=\"contains-task-list\""))
+
         let doneFragment = try #require(liFragment(containing: "Done", in: html))
         #expect(doneFragment.contains("class=\"task-list-item\""))
         #expect(doneFragment.contains("<input type=\"checkbox\""))
+        #expect(doneFragment.contains("task-list-item-checkbox"))
         #expect(doneFragment.contains("disabled"))
         #expect(doneFragment.contains("checked"))
 
