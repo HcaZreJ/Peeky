@@ -31,12 +31,14 @@ enum MarkdownHTMLRenderer {
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>\(css)</style>
         <style>
-        body{margin:0}
+        html,body{margin:0}
+        body{background-color:#ffffff}
+        @media (prefers-color-scheme: dark){body{background-color:#0d1117}}
         .markdown-body{box-sizing:border-box;max-width:980px;margin:0 auto;padding:32px 24px}
         .markdown-body img{max-width:100%}
         </style>
         </head>
-        <body class="markdown-body">\(bodyHTML)</body>
+        <body><article class="markdown-body">\(bodyHTML)</article></body>
         <script>function scrollToHeading(n){var e=document.getElementById('heading-'+n);if(e)e.scrollIntoView();}</script>
         </html>
         """
