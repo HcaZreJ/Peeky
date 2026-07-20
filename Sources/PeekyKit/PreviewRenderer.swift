@@ -24,19 +24,27 @@ struct RenderedPreview {
     /// 非 nil = 命中 HighlightService 高亮接入范围（shiki language id）；PreviewWindowController
     /// 据此起 highlightStream 分块上色，并统一编辑器区为 Dark Modern 配色。
     let highlightLanguage: String?
+    /// true = 由 PreviewWindowController 用 `JSONHighlighter` 对可见区做惰性语义上色（JSON/JSONL）。
+    let usesJSONHighlighting: Bool
+    /// true = 编辑器区背景/前景/token 走 `PeekyTheme` 跟随系统 light/dark 外观。
+    let followsSystemAppearance: Bool
 
     init(
         attributedText: NSAttributedString,
         note: String?,
         outline: [MarkdownOutlineItem] = [],
         display: PreviewDisplayMetadata = .plain,
-        highlightLanguage: String? = nil
+        highlightLanguage: String? = nil,
+        usesJSONHighlighting: Bool = false,
+        followsSystemAppearance: Bool = false
     ) {
         self.attributedText = attributedText
         self.note = note
         self.outline = outline
         self.display = display
         self.highlightLanguage = highlightLanguage
+        self.usesJSONHighlighting = usesJSONHighlighting
+        self.followsSystemAppearance = followsSystemAppearance
     }
 
     var usesDarkModernTheme: Bool { highlightLanguage != nil }
@@ -47,8 +55,7 @@ enum PreviewRenderer {
 
     static func render(
         document: LoadedText,
-        mode: PreviewMode,
-        collapseNestedJSON: Bool = false
+        mode: PreviewMode
     ) -> RenderedPreview {
         if mode == .raw || !document.kind.hasFormattedPreview {
             let raw = renderRaw(document)
@@ -63,7 +70,7 @@ enum PreviewRenderer {
             return raw
         }
 
-        if document.readBytes > richFormatLimit {
+        if document.readBytes > richFormatLimit && document.kind != .json && document.kind != .jsonl {
             let raw = renderRaw(document)
             let outline = document.kind == .markdown ? MarkdownRenderer.outline(in: document.text) : []
             return RenderedPreview(
@@ -85,40 +92,36 @@ enum PreviewRenderer {
         case .json:
             do {
                 let pretty = try JSONFormatter.prettyJSON(document.text)
-                let renderedText = collapseNestedJSON
-                    ? JSONFormatter.collapsedNestedContainers(in: pretty)
-                    : pretty
                 return RenderedPreview(
-                    attributedText: SyntaxHighlighter.highlightJSON(renderedText),
-                    note: collapseNestedJSON ? "Formatted, folded" : "Formatted",
-                    display: .lineNumbers(for: renderedText, showsIndentGuides: true)
+                    attributedText: SyntaxHighlighter.monospace(pretty),
+                    note: "Formatted",
+                    display: .lineNumbers(for: pretty),
+                    usesJSONHighlighting: true,
+                    followsSystemAppearance: true
                 )
             } catch {
                 return RenderedPreview(
-                    attributedText: SyntaxHighlighter.highlightJSON(document.text),
+                    attributedText: SyntaxHighlighter.monospace(document.text),
                     note: "Invalid JSON",
-                    display: .lineNumbers(for: document.text, showsIndentGuides: true)
+                    display: .lineNumbers(for: document.text),
+                    usesJSONHighlighting: true,
+                    followsSystemAppearance: true
                 )
             }
         case .jsonl:
-            let result = JSONFormatter.prettyJSONLines(
-                document.text,
-                collapseNestedContainers: collapseNestedJSON
-            )
-            let attributed = NSMutableAttributedString(
-                attributedString: SyntaxHighlighter.highlightJSON(result.text)
-            )
-            applyInvalidLineHighlighting(to: attributed, records: result.records)
+            let result = JSONFormatter.prettyJSONLines(document.text)
 
-            var notes = [collapseNestedJSON ? "Formatted, folded" : "Formatted"]
+            var notes = ["Formatted"]
             if result.invalidLineCount > 0 {
                 notes.append("\(result.invalidLineCount) invalid line(s)")
             }
 
             return RenderedPreview(
-                attributedText: attributed,
+                attributedText: SyntaxHighlighter.monospace(result.text),
                 note: notes.joined(separator: ", "),
-                display: .jsonLines(text: result.text, records: result.records)
+                display: .jsonLines(text: result.text, records: result.records),
+                usesJSONHighlighting: true,
+                followsSystemAppearance: true
             )
         case .xml:
             do {
@@ -163,7 +166,7 @@ enum PreviewRenderer {
                     SyntaxHighlighter.highlightJSON(document.text)
                 },
                 note: "Raw",
-                display: .lineNumbers(for: document.text, showsIndentGuides: document.kind == .json),
+                display: .lineNumbers(for: document.text),
                 highlightLanguage: language
             )
         case .xml, .plist:
@@ -196,23 +199,5 @@ enum PreviewRenderer {
             .foregroundColor: DarkModernTheme.foreground,
             .paragraphStyle: paragraph
         ])
-    }
-
-    private static func applyInvalidLineHighlighting(
-        to attributed: NSMutableAttributedString,
-        records: [JSONLineRecord]
-    ) {
-        for record in records where record.isInvalid {
-            attributed.addAttribute(
-                .backgroundColor,
-                value: NSColor.systemRed.withAlphaComponent(0.13),
-                range: record.range
-            )
-            attributed.addAttribute(
-                .foregroundColor,
-                value: NSColor.systemRed,
-                range: record.range
-            )
-        }
     }
 }

@@ -139,35 +139,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         editMenu.delegate = self
         self.editMenu = editMenu
 
-        let viewMenuItem = NSMenuItem()
-        mainMenu.addItem(viewMenuItem)
-
-        let viewMenu = NSMenu(title: "View")
-        viewMenuItem.submenu = viewMenu
-
-        let expandAllItem = NSMenuItem(title: "Expand All", action: #selector(expandAllAction(_:)), keyEquivalent: "9")
-        expandAllItem.keyEquivalentModifierMask = [.command, .shift]
-        expandAllItem.target = self
-        viewMenu.addItem(expandAllItem)
-
-        let collapseAllItem = NSMenuItem(title: "Collapse All", action: #selector(collapseAllAction(_:)), keyEquivalent: "0")
-        collapseAllItem.keyEquivalentModifierMask = [.command, .shift]
-        collapseAllItem.target = self
-        viewMenu.addItem(collapseAllItem)
-
-        viewMenu.addItem(.separator())
-
-        for level in 1...3 {
-            let collapseToLevelItem = NSMenuItem(
-                title: "Collapse to Level \(level)",
-                action: #selector(collapseToLevelAction(_:)),
-                keyEquivalent: ""
-            )
-            collapseToLevelItem.target = self
-            collapseToLevelItem.tag = level
-            viewMenu.addItem(collapseToLevelItem)
-        }
-
         NSApp.mainMenu = mainMenu
     }
 
@@ -195,7 +166,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     /// 复制五件套 + ⌘E 六项：无打开文件时全部禁用；相对路径项额外要求命中 repo root。
-    /// JSON 树折叠命令族：仅当活跃 tab 的树视图当前可见时可用。
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let copyActions: Set<Selector> = [
             #selector(copyAllTextAction(_:)),
@@ -205,17 +175,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             #selector(copyPathLineAction(_:)),
             #selector(openInEditorAction(_:))
         ]
-
-        let jsonTreeActions: Set<Selector> = [
-            #selector(expandAllAction(_:)),
-            #selector(collapseAllAction(_:)),
-            #selector(collapseToLevelAction(_:))
-        ]
-
-        if let action = menuItem.action, jsonTreeActions.contains(action) {
-            guard let controller = activeWindowController(), !controller.isEmpty else { return false }
-            return controller.isJSONTreeActive
-        }
 
         guard let action = menuItem.action, copyActions.contains(action) else {
             return true
@@ -255,18 +214,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     @objc private func openInEditorAction(_ sender: Any?) {
         activeWindowController()?.openInEditor()
-    }
-
-    @objc private func expandAllAction(_ sender: Any?) {
-        activeWindowController()?.expandJSONTreeAll()
-    }
-
-    @objc private func collapseAllAction(_ sender: Any?) {
-        activeWindowController()?.collapseJSONTreeAll()
-    }
-
-    @objc private func collapseToLevelAction(_ sender: NSMenuItem) {
-        activeWindowController()?.collapseJSONTree(toLevel: sender.tag)
     }
 
     private func showOpenPanel() {
