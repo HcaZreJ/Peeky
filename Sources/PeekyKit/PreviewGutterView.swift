@@ -220,7 +220,7 @@ final class PreviewGutterView: NSRulerView {
             + textView.textContainerOrigin.y
             + lineRect.minY
             + max(0, (lineRect.height - size.height) / 2)
-        let x = bounds.maxX - size.width - 8
+        let x = bounds.maxX - size.width - 5
 
         displayLabel.draw(at: NSPoint(x: x, y: y), withAttributes: attributes)
     }

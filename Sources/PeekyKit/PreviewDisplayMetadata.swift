@@ -46,16 +46,14 @@ struct PreviewGutterConfiguration {
     }
 
     private static func gutterWidth(maxLabelLength: Int) -> CGFloat {
-        max(44, CGFloat(maxLabelLength) * 8 + 24)
+        max(30, CGFloat(maxLabelLength) * 7 + 12)
     }
 }
 
 struct PreviewTextOverlayConfiguration {
-    let showsIndentGuides: Bool
     let recordSeparatorLocations: [Int]
 
     static let hidden = PreviewTextOverlayConfiguration(
-        showsIndentGuides: false,
         recordSeparatorLocations: []
     )
 }
@@ -75,11 +73,10 @@ struct PreviewDisplayMetadata {
         invalidRecordRanges: []
     )
 
-    static func lineNumbers(for text: String, showsIndentGuides: Bool) -> PreviewDisplayMetadata {
+    static func lineNumbers(for text: String) -> PreviewDisplayMetadata {
         PreviewDisplayMetadata(
             gutter: .lineNumbers(for: text),
             textOverlay: PreviewTextOverlayConfiguration(
-                showsIndentGuides: showsIndentGuides,
                 recordSeparatorLocations: []
             ),
             targetLocationsByOriginalLine: [:],
@@ -101,7 +98,6 @@ struct PreviewDisplayMetadata {
         return PreviewDisplayMetadata(
             gutter: .markers(markers),
             textOverlay: PreviewTextOverlayConfiguration(
-                showsIndentGuides: true,
                 recordSeparatorLocations: records.dropFirst().map { $0.range.location }
             ),
             targetLocationsByOriginalLine: targets,

@@ -95,7 +95,7 @@ enum PreviewRenderer {
                 return RenderedPreview(
                     attributedText: SyntaxHighlighter.monospace(pretty),
                     note: "Formatted",
-                    display: .lineNumbers(for: pretty, showsIndentGuides: true),
+                    display: .lineNumbers(for: pretty),
                     usesJSONHighlighting: true,
                     followsSystemAppearance: true
                 )
@@ -103,7 +103,7 @@ enum PreviewRenderer {
                 return RenderedPreview(
                     attributedText: SyntaxHighlighter.monospace(document.text),
                     note: "Invalid JSON",
-                    display: .lineNumbers(for: document.text, showsIndentGuides: true),
+                    display: .lineNumbers(for: document.text),
                     usesJSONHighlighting: true,
                     followsSystemAppearance: true
                 )
@@ -166,7 +166,7 @@ enum PreviewRenderer {
                     SyntaxHighlighter.highlightJSON(document.text)
                 },
                 note: "Raw",
-                display: .lineNumbers(for: document.text, showsIndentGuides: document.kind == .json),
+                display: .lineNumbers(for: document.text),
                 highlightLanguage: language
             )
         case .xml, .plist:

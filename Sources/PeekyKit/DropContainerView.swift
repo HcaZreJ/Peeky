@@ -481,7 +481,6 @@ final class DropTextView: NSTextView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         drawRecordSeparators()
-        drawIndentGuides()
         onDidDraw?()
     }
 
@@ -505,56 +504,6 @@ final class DropTextView: NSTextView {
         }
 
         NSColor.separatorColor.withAlphaComponent(0.5).setStroke()
-        path.stroke()
-    }
-
-    private func drawIndentGuides() {
-        guard
-            overlayConfiguration.showsIndentGuides,
-            let layoutManager,
-            let textContainer,
-            let textStorage,
-            textStorage.length > 0
-        else {
-            return
-        }
-
-        let visibleGlyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
-        guard visibleGlyphRange.length > 0 else { return }
-
-        let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        let spaceWidth = " ".size(withAttributes: [.font: font]).width
-        let text = string as NSString
-        let path = NSBezierPath()
-        path.lineWidth = 1
-
-        var glyphIndex = visibleGlyphRange.location
-        while glyphIndex < NSMaxRange(visibleGlyphRange) {
-            var lineGlyphRange = NSRange()
-            let lineRect = layoutManager.lineFragmentRect(
-                forGlyphAt: glyphIndex,
-                effectiveRange: &lineGlyphRange,
-                withoutAdditionalLayout: true
-            )
-            let charRange = layoutManager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
-            let line = text.substring(with: charRange)
-            let leadingSpaces = countLeadingSpaces(in: line)
-
-            if leadingSpaces >= 2 {
-                let yStart = textContainerOrigin.y + lineRect.minY + 1
-                let yEnd = textContainerOrigin.y + lineRect.maxY - 1
-
-                for level in stride(from: 2, through: leadingSpaces, by: 2) {
-                    let x = textContainerOrigin.x + CGFloat(level) * spaceWidth - spaceWidth / 2
-                    path.move(to: NSPoint(x: x, y: yStart))
-                    path.line(to: NSPoint(x: x, y: yEnd))
-                }
-            }
-
-            glyphIndex = NSMaxRange(lineGlyphRange)
-        }
-
-        NSColor.separatorColor.withAlphaComponent(0.38).setStroke()
         path.stroke()
     }
 
@@ -584,17 +533,5 @@ final class DropTextView: NSTextView {
 
         guard visibleRect.intersects(lineRect.insetBy(dx: -1, dy: -12)) else { return nil }
         return (lineRect, usedRect)
-    }
-
-    private func countLeadingSpaces(in line: String) -> Int {
-        var count = 0
-        for scalar in line.unicodeScalars {
-            if scalar == " " {
-                count += 1
-            } else {
-                break
-            }
-        }
-        return count
     }
 }

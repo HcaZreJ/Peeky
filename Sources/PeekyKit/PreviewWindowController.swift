@@ -286,6 +286,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let outlineStack = FlippedStackView()
     private let contentView = DropContainerView()
     private let headerView = DropHeaderView()
+    private let headerDivider: NSBox = {
+        let box = NSBox()
+        box.boxType = .separator
+        box.translatesAutoresizingMaskIntoConstraints = false
+        return box
+    }()
     private let titleLabel = NSTextField(labelWithString: "Peeky")
     private let metaLabel = NSTextField(labelWithString: "")
     private let modeControl = NSSegmentedControl(labels: ["Format", "Raw"], trackingMode: .selectOne, target: nil, action: nil)
@@ -381,7 +387,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             if let existingIndex = tabs.firstIndex(where: { $0.url.standardizedFileURL == standardizedURL }) {
                 selectedTabID = tabs[existingIndex].id
                 if request.line != nil {
-                    tabs[existingIndex].mode = .raw
+                    let existingKind = tabs[existingIndex].document?.kind
+                    if existingKind != .json && existingKind != .jsonl {
+                        tabs[existingIndex].mode = .raw
+                    }
                     tabs[existingIndex].targetLine = request.line
                     tabs[existingIndex].targetColumn = request.column
                 }
@@ -391,7 +400,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
             var tab = loadTab(url: standardizedURL)
             if request.line != nil {
-                tab.mode = .raw
+                if tab.document?.kind != .json && tab.document?.kind != .jsonl {
+                    tab.mode = .raw
+                }
                 tab.targetLine = request.line
                 tab.targetColumn = request.column
             }
@@ -457,6 +468,11 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             headerView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             headerView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             headerView.heightAnchor.constraint(equalToConstant: 50),
+
+            headerDivider.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            headerDivider.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            headerDivider.topAnchor.constraint(equalTo: headerView.bottomAnchor),
+            headerDivider.heightAnchor.constraint(equalToConstant: 1),
 
             scrollView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
@@ -720,6 +736,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             self?.rootView.setDropHighlight(active)
         }
         contentView.addSubview(headerView)
+        contentView.addSubview(headerDivider)
 
         titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         titleLabel.lineBreakMode = .byTruncatingMiddle
@@ -792,11 +809,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         textView.allowsUndo = false
         textView.drawsBackground = true
         textView.backgroundColor = .textBackgroundColor
-        // 大纲跳转 / peeky:// 行定位会用 setSelectedRange 选中整行做定位反馈；
-        // 未聚焦时 AppKit 默认用非强调灰色高亮整行，深色模式下在标题行上格外
-        // 显眼，故关闭选中背景色，只保留滚动定位本身。
-        textView.selectedTextAttributes = [.backgroundColor: NSColor.clear]
-        textView.textContainerInset = NSSize(width: 18, height: 16)
+        // 标准选中高亮（跟随系统强调色），保证用户鼠标选中可见、⌘C 可复制。
+        textView.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
+        textView.textContainerInset = NSSize(width: 4, height: 8)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -1039,6 +1054,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         targetLine: Int?,
         tabID: UUID
     ) {
+        // JSON/JSONL 是唯一渲染形态（pretty-print 分色），不提供 Format/Raw 切换。
+        let isJSONFamily = document.kind == .json || document.kind == .jsonl
+        modeControl.isHidden = isJSONFamily
         modeControl.selectedSegment = mode.rawValue
         modeControl.isEnabled = document.kind.hasFormattedPreview
         modeControl.setLabel(document.kind == .markdown ? "Preview" : "Format", forSegment: 0)

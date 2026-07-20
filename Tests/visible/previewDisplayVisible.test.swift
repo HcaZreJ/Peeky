@@ -27,7 +27,6 @@ struct Visible_previewDisplay {
             return
         }
         #expect(starts.count > 1)
-        #expect(rendered.display.textOverlay.showsIndentGuides)
     }
 
     @Test("json raw 恢复行号 gutter")
@@ -59,7 +58,7 @@ struct Visible_previewDisplay {
         #expect(!rendered.display.targetLocationsByOriginalLine.isEmpty)
     }
 
-    @Test("jsonl raw 恢复行号 gutter 且无缩进参考线")
+    @Test("jsonl raw 恢复行号 gutter")
     func jsonlRawHasLineNumberGutter() {
         let document = loadedText("{\"id\": 1}\n{\"id\": 2}", kind: .jsonl)
         let rendered = PreviewRenderer.render(document: document, mode: .raw)
@@ -69,6 +68,5 @@ struct Visible_previewDisplay {
             Issue.record("期望 lineNumbers gutter，实际 \(rendered.display.gutter.mode)")
             return
         }
-        #expect(!rendered.display.textOverlay.showsIndentGuides)
     }
 }
