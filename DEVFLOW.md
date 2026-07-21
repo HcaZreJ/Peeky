@@ -27,8 +27,8 @@
 
 ## 手动验收清单（转型期）
 - **任何 UI/渲染改动须在浅色与深色两种外观下各过一遍**（系统外观切换或 `defaults write -g AppleInterfaceStyle`）；颜色类改动另需两外观 resolve 亮度断言（背景/前景对比方向正确）
-- `swift run Peeky <md>` → 弹出即读，Markdown 大纲侧栏可点
-- 多标题 Markdown（≥40 个标题）→ 窗口高度不超出屏幕、上下可自由 resize，CONTENTS 大纲区在 35% 上限内自行滚动
+- `swift run Peeky <md>` → 弹出即读，侧栏 Contents tab 内 Markdown 大纲可点；Open/Files/Contents 三 tab 点击即切且记住上次选择，非 markdown 文件 Contents 置灰回落 Files
+- 多标题 Markdown（≥40 个标题）→ 窗口高度不超出屏幕、上下可自由 resize，Contents tab 大纲占满侧栏高、超出自行滚动
 - `<json>` / `<jsonl>` → pretty-print 缩进 + 语义分色（key/串/数/bool/null/标点；浅色 GitHub Light、深色 VSC Dark Modern，跟随系统明暗），鼠标选中 ⌘C 复制，行号 gutter，JSONL 坏行红底红字 + gutter "!"；滚动时可视区即时上色、几万行不卡
 - `<py/ts/yaml…>` → Dark Modern 原色高亮，暗底统一，选中 ⌘C 可复制；⌘E 跳编辑器带行号
 - `.app` bundle 后 `open "peeky://open?path=...&line=N"` → 打开并定位到行
