@@ -21,14 +21,47 @@ import Foundation
 ///
 /// clipsToBounds 显式 true：macOS 14 起 NSView 默认不裁剪，越界绘制会涂到兄弟
 /// 视图上（本 repo 曾踩过的坑，见 issue #2）。
+enum GutterDisclosureState {
+    case expanded
+    case collapsed
+}
+
+/// 折叠态跳号行号 + 三角显示数据：`PreviewWindowController` 按当前折叠状态重算后
+/// 整体注入，gutter 只读不算。
+struct GutterFoldDisplay {
+    /// 可见行号(0-based) → 源行号(0-based)。折叠后行号跳号（如可见行 12 之后直接 181）。
+    let visibleLineToSourceLine: [Int]
+    /// 可见行号(0-based) → 该行的折叠三角状态；无三角的行不出现在字典中。
+    let disclosures: [Int: GutterDisclosureState]
+    /// 可见文本每行起点的 UTF-16 位置表（可见行号(0-based) → 起点位置），三角绘制
+    /// 与点击命中据此定位所在可见行，与 configuration.mode（.lineNumbers/.markers）
+    /// 无关——JSONL 的 .markers 模式同样可折叠、同样需要三角。
+    let lineStartLocations: [Int]
+}
+
 final class PreviewGutterView: NSRulerView {
+    /// 三角带宽度（贴分隔线内侧）与三角自身尺寸。
+    private static let disclosureLaneWidth: CGFloat = 14
+    private static let disclosureSize: CGFloat = 7
+
     var configuration = PreviewGutterConfiguration.hidden {
         didSet {
-            ruleThickness = configuration.width
+            ruleThickness = recomputedRuleThickness()
             hostScrollView?.rulersVisible = configuration.isVisible
             needsDisplay = true
         }
     }
+
+    /// 非 nil 时启用跳号行号 + 折叠三角绘制/点击；nil 时本视图行为与改动前完全一致。
+    var foldDisplay: GutterFoldDisplay? {
+        didSet {
+            ruleThickness = recomputedRuleThickness()
+            needsDisplay = true
+        }
+    }
+
+    /// 三角带命中时回调，参数为被点击三角所在的可见行号(0-based)。
+    var onToggleFold: ((Int) -> Void)?
 
     private weak var textView: NSTextView?
     private weak var hostScrollView: NSScrollView?
@@ -46,7 +79,7 @@ final class PreviewGutterView: NSRulerView {
     override init(scrollView: NSScrollView?, orientation: NSRulerView.Orientation) {
         super.init(scrollView: scrollView, orientation: orientation)
         clipsToBounds = true
-        ruleThickness = configuration.width
+        ruleThickness = recomputedRuleThickness()
     }
 
     required init(coder: NSCoder) {
@@ -115,8 +148,14 @@ final class PreviewGutterView: NSRulerView {
             }
         })
 
-        ruleThickness = configuration.width
+        ruleThickness = recomputedRuleThickness()
         scrollView.rulersVisible = configuration.isVisible
+    }
+
+    /// `foldDisplay` 非 nil 时三角带（14pt）计入总宽度，贴分隔线内侧；nil 时维持
+    /// configuration.width 原值。
+    private func recomputedRuleThickness() -> CGFloat {
+        foldDisplay != nil ? configuration.width + Self.disclosureLaneWidth : configuration.width
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
@@ -167,6 +206,8 @@ final class PreviewGutterView: NSRulerView {
 
         let originInRuler = convert(NSZeroPoint, from: textView)
 
+        let foldDisplay = self.foldDisplay
+
         layoutManager.enumerateLineFragments(forGlyphRange: visibleGlyphRange) { lineRect, _, _, lineGlyphRange, _ in
             let charRange = layoutManager.characterRange(forGlyphRange: lineGlyphRange, actualGlyphRange: nil)
 
@@ -177,17 +218,40 @@ final class PreviewGutterView: NSRulerView {
                 label = marker.label
                 isWarning = marker.isWarning
             } else if let visualLine = self.visualLineNumber(for: charRange.location, lineStarts: lineStarts) {
-                label = String(visualLine)
+                let visibleLineIndex = visualLine - 1
+                if let foldDisplay, visibleLineIndex >= 0, visibleLineIndex < foldDisplay.visibleLineToSourceLine.count {
+                    label = String(foldDisplay.visibleLineToSourceLine[visibleLineIndex] + 1)
+                } else {
+                    label = String(visualLine)
+                }
                 isWarning = false
             } else {
                 label = nil
                 isWarning = false
             }
 
+            // 三角解析与 configuration.mode 无关：命中 foldDisplay.lineStartLocations
+            // 中某项（该逻辑行的首个视觉行，判法同 visualLineNumber 的精确二分）才有
+            // 三角；折行续行片段天然不命中，零三角。
+            let disclosureState: GutterDisclosureState? = foldDisplay.flatMap { foldDisplay in
+                self.visualLineNumber(for: charRange.location, lineStarts: foldDisplay.lineStartLocations)
+                    .flatMap { foldDisplay.disclosures[$0 - 1] }
+            }
+
             if let label {
                 self.drawLabel(
                     label,
                     isWarning: isWarning,
+                    lineRect: lineRect,
+                    textView: textView,
+                    originInRuler: originInRuler,
+                    appearance: appearance
+                )
+            }
+
+            if let disclosureState {
+                self.drawDisclosure(
+                    state: disclosureState,
                     lineRect: lineRect,
                     textView: textView,
                     originInRuler: originInRuler,
@@ -220,9 +284,46 @@ final class PreviewGutterView: NSRulerView {
             + textView.textContainerOrigin.y
             + lineRect.minY
             + max(0, (lineRect.height - size.height) / 2)
-        let x = bounds.maxX - size.width - 5
+        let x = foldDisplay != nil
+            ? bounds.maxX - Self.disclosureLaneWidth - size.width - 5
+            : bounds.maxX - size.width - 5
 
         displayLabel.draw(at: NSPoint(x: x, y: y), withAttributes: attributes)
+    }
+
+    private func drawDisclosure(
+        state: GutterDisclosureState,
+        lineRect: NSRect,
+        textView: NSTextView,
+        originInRuler: NSPoint,
+        appearance: PeekyTheme.Appearance
+    ) {
+        let laneMinX = bounds.maxX - Self.disclosureLaneWidth
+        let centerX = laneMinX + Self.disclosureLaneWidth / 2
+        let centerY = originInRuler.y
+            + textView.textContainerOrigin.y
+            + lineRect.minY
+            + lineRect.height / 2
+        let half = Self.disclosureSize / 2
+
+        let path = NSBezierPath()
+        switch state {
+        case .expanded:
+            // 底边朝上（较小 y，靠近视觉顶部），顶点朝下（较大 y，靠近视觉底部）：▾
+            path.move(to: NSPoint(x: centerX - half, y: centerY - half))
+            path.line(to: NSPoint(x: centerX + half, y: centerY - half))
+            path.line(to: NSPoint(x: centerX, y: centerY + half))
+            path.close()
+        case .collapsed:
+            // 左边竖直，顶点朝右：▸
+            path.move(to: NSPoint(x: centerX - half, y: centerY - half))
+            path.line(to: NSPoint(x: centerX - half, y: centerY + half))
+            path.line(to: NSPoint(x: centerX + half, y: centerY))
+            path.close()
+        }
+
+        PeekyTheme.color(.gutterDisclosure, appearance: appearance).setFill()
+        path.fill()
     }
 
     private func visualLineNumber(for location: Int, lineStarts: [Int]) -> Int? {
@@ -244,5 +345,61 @@ final class PreviewGutterView: NSRulerView {
 
         guard lineStarts[match] == location else { return nil }
         return match + 1
+    }
+
+    /// 同 visualLineNumber 的二分定位思路，但不要求精确命中：返回 lineStarts 中
+    /// <= location 的最后一项对应的可见行号(0-based)，用于把点击处的任意字符位置
+    /// 映射回其所在的可见行。
+    private func floorVisibleLineIndex(for location: Int, lineStarts: [Int]) -> Int? {
+        guard !lineStarts.isEmpty else { return nil }
+
+        var low = 0
+        var high = lineStarts.count - 1
+        var match = 0
+
+        while low <= high {
+            let mid = (low + high) / 2
+            if lineStarts[mid] <= location {
+                match = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+
+        return match
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard
+            let foldDisplay,
+            let textView,
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer,
+            !foldDisplay.lineStartLocations.isEmpty
+        else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        let pointInSelf = convert(event.locationInWindow, from: nil)
+        guard pointInSelf.x >= bounds.maxX - Self.disclosureLaneWidth, pointInSelf.x <= bounds.maxX else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        let pointInTextView = convert(pointInSelf, to: textView)
+        let glyphIndex = layoutManager.glyphIndex(for: pointInTextView, in: textContainer)
+        let charIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+
+        guard
+            let visibleLine = floorVisibleLineIndex(for: charIndex, lineStarts: foldDisplay.lineStartLocations),
+            foldDisplay.disclosures[visibleLine] != nil
+        else {
+            super.mouseDown(with: event)
+            return
+        }
+
+        onToggleFold?(visibleLine)
     }
 }
