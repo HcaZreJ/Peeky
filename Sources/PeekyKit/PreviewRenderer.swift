@@ -73,13 +73,6 @@ enum PreviewRenderer {
         }
 
         switch document.kind {
-        case .markdown:
-            let rendered = MarkdownRenderer.renderWithOutline(document.text)
-            return RenderedPreview(
-                attributedText: rendered.attributedText,
-                note: nil,
-                outline: rendered.outline
-            )
         case .json:
             do {
                 let pretty = try JSONFormatter.prettyJSON(document.text)
@@ -140,7 +133,7 @@ enum PreviewRenderer {
                     note: "Invalid plist"
                 )
             }
-        case .yaml, .csv, .log, .text:
+        case .markdown, .yaml, .csv, .log, .text:
             return renderRaw(document)
         }
     }

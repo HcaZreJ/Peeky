@@ -342,9 +342,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// 在途 Task 据此丢弃迟到的 chunk，杜绝旧文档颜色刷到新文档上。
     private var highlightGeneration = 0
     private var highlightTask: Task<Void, Never>?
-    /// Markdown 围栏代码块逐块高亮 Task 集合（一个 markdown 文档可含多个代码块，
-    /// 各自独立起 Task）；invalidateHighlighting() 与 highlightTask 一并取消清空。
-    private var codeBlockHighlightTasks: [Task<Void, Never>] = []
     private var sidebarWidthConstraint: NSLayoutConstraint?
     private var isFileTreeCollapsed = false
     /// 当前文件树的根目录；nil 表示尚未打开过任何文件/目录，树区未建立。
@@ -1123,9 +1120,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
         if document.kind == .markdown {
             rebuildMarkdownOutline(rendered.outline)
-            if mode == .formatted {
-                highlightMarkdownCodeBlocks(tabID: tabID)
-            }
         } else {
             clearMarkdownOutline()
         }
@@ -1413,10 +1407,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func invalidateHighlighting() {
         highlightTask?.cancel()
         highlightTask = nil
-        for task in codeBlockHighlightTasks {
-            task.cancel()
-        }
-        codeBlockHighlightTasks.removeAll()
         highlightGeneration += 1
     }
 
@@ -1453,98 +1443,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
                 let length = (token.text as NSString).length
                 guard length > 0 else { continue }
                 guard location + length <= totalLength else { break }
-                textStorage.addAttribute(
-                    .foregroundColor,
-                    value: highlightColor(fromHex: token.colorHex),
-                    range: NSRange(location: location, length: length)
-                )
-                location += length
-            }
-        }
-        textStorage.endEditing()
-    }
-
-    /// Markdown 围栏代码块语言标记（``` py / ```TypeScript 等，来自
-    /// `MarkdownRenderer.codeLanguageAttributeKey`）到 shiki language id 的别名
-    /// 映射；未识别的语言/空标记返回 nil，调用方保持该代码块现状（只有底色块，
-    /// 不上色）。HighlightService 本身只认精确的 shiki language id，不做别名
-    /// 归一化，故映射放在消费端而非 HighlightService.swift。
-    private static let fenceCodeLanguageAliases: [String: String] = [
-        "python": "python", "py": "python",
-        "typescript": "typescript", "ts": "typescript",
-        "javascript": "javascript", "js": "javascript", "node": "javascript",
-        "json": "json", "jsonc": "json",
-        "yaml": "yaml", "yml": "yaml",
-        "toml": "toml",
-        "bash": "bash", "sh": "bash", "shell": "bash", "zsh": "bash",
-        "swift": "swift",
-        "ini": "ini", "conf": "ini", "config": "ini"
-    ]
-
-    private static func shikiLanguage(forFenceTag fenceTag: String) -> String? {
-        fenceCodeLanguageAliases[fenceTag.lowercased()]
-    }
-
-    /// Markdown formatted 渲染落定（textStorage 已 setAttributedString）后，扫描
-    /// 其中带 `MarkdownRenderer.codeLanguageAttributeKey` 的围栏代码块 run；每个
-    /// 识别出 shiki language 的代码块各自起一个高亮 Task，落地后按行/列偏移原位
-    /// `addAttribute(.foregroundColor)` 上色（同 applyHighlightChunk 语义，不
-    /// 整体重设 attributedString）。run 的字符区间在上色期间不变——markdown 渲染
-    /// 是一次性 setAttributedString，这里只 addAttribute。代际 + activeTabID
-    /// 双重校验复用 startHighlighting 的既有防护语义，杜绝切 tab/重渲染后迟到的
-    /// 上色任务刷到新内容上。
-    private func highlightMarkdownCodeBlocks(tabID: UUID) {
-        guard let textStorage = textView.textStorage else { return }
-
-        let generation = highlightGeneration
-        let fullRange = NSRange(location: 0, length: textStorage.length)
-        let fullText = textStorage.string as NSString
-
-        textStorage.enumerateAttribute(
-            MarkdownRenderer.codeLanguageAttributeKey,
-            in: fullRange,
-            options: []
-        ) { value, range, _ in
-            guard
-                let fenceTag = value as? String,
-                let language = Self.shikiLanguage(forFenceTag: fenceTag),
-                range.length > 0
-            else {
-                return
-            }
-
-            let code = fullText.substring(with: range)
-            let lineStarts = PreviewDisplayMetadata.lineStartLocations(in: code)
-
-            let task = Task { @MainActor [weak self] in
-                guard let self else { return }
-                guard let lines = await HighlightService.shared.highlight(text: code, language: language) else { return }
-                guard !Task.isCancelled else { return }
-                guard self.highlightGeneration == generation, self.activeTabID == tabID else { return }
-                self.applyCodeBlockTokens(lines, blockRange: range, lineStarts: lineStarts, textStorage: textStorage)
-            }
-            codeBlockHighlightTasks.append(task)
-        }
-    }
-
-    private func applyCodeBlockTokens(
-        _ lines: [HighlightedLine],
-        blockRange: NSRange,
-        lineStarts: [Int],
-        textStorage: NSTextStorage
-    ) {
-        let totalLength = textStorage.length
-        let blockEnd = blockRange.location + blockRange.length
-
-        textStorage.beginEditing()
-        for (lineIndex, line) in lines.enumerated() {
-            guard lineIndex < lineStarts.count else { break }
-
-            var location = blockRange.location + lineStarts[lineIndex]
-            for token in line {
-                let length = (token.text as NSString).length
-                guard length > 0 else { continue }
-                guard location + length <= totalLength, location + length <= blockEnd else { break }
                 textStorage.addAttribute(
                     .foregroundColor,
                     value: highlightColor(fromHex: token.colorHex),
@@ -1609,14 +1507,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func scrollToOutlineItem(_ item: MarkdownOutlineItem) {
-        if activeTab?.mode == .formatted, let renderedLocation = item.renderedLocation {
-            scrollToTopAligned(characterLocation: renderedLocation)
-        } else {
-            let text = textView.string as NSString
-            guard text.length > 0 else { return }
-            let location = characterOffset(forLine: item.sourceLine, in: text)
-            scrollToTopAligned(characterLocation: location)
-        }
+        let text = textView.string as NSString
+        guard text.length > 0 else { return }
+        let location = characterOffset(forLine: item.sourceLine, in: text)
+        scrollToTopAligned(characterLocation: location)
     }
 
     /// 大纲点击专用置顶滚动：把目标字符位置所在逻辑行的首行滚到可视区顶部
