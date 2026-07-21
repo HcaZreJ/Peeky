@@ -54,13 +54,13 @@ enum PeekyTheme {
         .gutterText: "#6E7681",
         .invalidLineForeground: "#F85149",
         .invalidLineBackground: "#F8514922",
-        .indentGuide: "#000000",
-        .foldChipBackground: "#000000",
-        .foldChipBorder: "#000000",
-        .foldChipGlyph: "#000000",
-        .statusBarBackground: "#000000",
-        .statusBarText: "#000000",
-        .gutterDisclosure: "#000000",
+        .indentGuide: "#404040",
+        .foldChipBackground: "#3A3D41",
+        .foldChipBorder: "#525252",
+        .foldChipGlyph: "#D4D4D4",
+        .statusBarBackground: "#181818",
+        .statusBarText: "#CCCCCC",
+        .gutterDisclosure: "#A0A0A0",
     ]
 
     /// light：GitHub Light
@@ -77,13 +77,13 @@ enum PeekyTheme {
         .gutterText: "#8C959F",
         .invalidLineForeground: "#CF222E",
         .invalidLineBackground: "#CF222E1F",
-        .indentGuide: "#000000",
-        .foldChipBackground: "#000000",
-        .foldChipBorder: "#000000",
-        .foldChipGlyph: "#000000",
-        .statusBarBackground: "#000000",
-        .statusBarText: "#000000",
-        .gutterDisclosure: "#000000",
+        .indentGuide: "#E1E4E8",
+        .foldChipBackground: "#EAEEF2",
+        .foldChipBorder: "#D0D7DE",
+        .foldChipGlyph: "#57606A",
+        .statusBarBackground: "#F6F8FA",
+        .statusBarText: "#424A53",
+        .gutterDisclosure: "#656D76",
     ]
 
     // MARK: - API

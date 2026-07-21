@@ -47,7 +47,110 @@ struct JSONFoldMap: Equatable, Sendable {
     }
 
     static func build(prettyText: String) -> JSONFoldMap {
-        _ = prettyText
-        return .empty
+        let units = Array(prettyText.utf16)
+        let length = units.count
+
+        struct OpenFrame {
+            let line: Int
+            let innerStart: Int
+            let kind: FoldRegion.Kind
+        }
+
+        let newline: UInt16 = 0x0A
+        let space: UInt16 = 0x20
+        let quote: UInt16 = 0x22
+        let backslash: UInt16 = 0x5C
+        let openBrace: UInt16 = 0x7B
+        let closeBrace: UInt16 = 0x7D
+        let openBracket: UInt16 = 0x5B
+        let closeBracket: UInt16 = 0x5D
+
+        var lineDepths: [Int] = []
+        var regions: [FoldRegion] = []
+        var stack: [OpenFrame] = []
+
+        var currentLine = 0
+        var depthPending = true
+        var currentDepthSpaces = 0
+
+        var inString = false
+        var escapeNext = false
+
+        var i = 0
+        while i < length {
+            let c = units[i]
+
+            if depthPending {
+                if c == space {
+                    currentDepthSpaces += 1
+                    i += 1
+                    continue
+                }
+                lineDepths.append(currentDepthSpaces / 2)
+                currentDepthSpaces = 0
+                depthPending = false
+            }
+
+            if inString {
+                if escapeNext {
+                    escapeNext = false
+                } else if c == backslash {
+                    escapeNext = true
+                } else if c == quote {
+                    inString = false
+                }
+            } else {
+                switch c {
+                case quote:
+                    inString = true
+                case openBrace:
+                    stack.append(OpenFrame(line: currentLine, innerStart: i + 1, kind: .object))
+                case openBracket:
+                    stack.append(OpenFrame(line: currentLine, innerStart: i + 1, kind: .array))
+                case closeBrace:
+                    if let top = stack.last, top.kind == .object {
+                        stack.removeLast()
+                        if top.line < currentLine {
+                            regions.append(FoldRegion(
+                                openLine: top.line,
+                                closeLine: currentLine,
+                                innerCharRange: NSRange(location: top.innerStart, length: i - top.innerStart),
+                                kind: .object
+                            ))
+                        }
+                    }
+                case closeBracket:
+                    if let top = stack.last, top.kind == .array {
+                        stack.removeLast()
+                        if top.line < currentLine {
+                            regions.append(FoldRegion(
+                                openLine: top.line,
+                                closeLine: currentLine,
+                                innerCharRange: NSRange(location: top.innerStart, length: i - top.innerStart),
+                                kind: .array
+                            ))
+                        }
+                    }
+                default:
+                    break
+                }
+            }
+
+            if c == newline {
+                currentLine += 1
+                depthPending = true
+                currentDepthSpaces = 0
+            }
+
+            i += 1
+        }
+
+        if depthPending {
+            lineDepths.append(currentDepthSpaces / 2)
+        }
+
+        regions.sort { $0.openLine < $1.openLine }
+
+        return JSONFoldMap(regions: regions, lineDepths: lineDepths)
     }
 }
