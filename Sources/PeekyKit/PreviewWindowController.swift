@@ -976,6 +976,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         guard tabs.contains(where: { $0.id == id }) else { return }
         activeTabID = id
         rebuildTabList()
+        // 文件树跟随新激活 tab：仍在当前根内只定位选中，在根外重算树根。
+        if let url = activeTab?.url {
+            establishTreeRoot(for: url)
+        }
         renderActiveTab()
     }
 
@@ -991,6 +995,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
 
         rebuildTabList()
+        if let url = activeTab?.url {
+            establishTreeRoot(for: url)
+        }
         renderActiveTab()
     }
 
