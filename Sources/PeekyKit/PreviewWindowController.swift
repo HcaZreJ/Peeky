@@ -830,7 +830,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         textView.backgroundColor = .textBackgroundColor
         // 标准选中高亮（跟随系统强调色），保证用户鼠标选中可见、⌘C 可复制。
         textView.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
-        textView.textContainerInset = NSSize(width: 4, height: 8)
+        // 与 applyMarkdownReadingColumn 的非 markdown 紧凑内边距一致，首帧即为最终值。
+        textView.textContainerInset = NSSize(width: 4, height: 6)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -1258,14 +1259,18 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         return document.kind == .markdown && tab.mode == .formatted
     }
 
-    /// 正文填满窗口：markdown-formatted 用略宽于默认的对称内边距（32pt），其余模式
-    /// 用默认 18pt。textView 走 widthTracksTextView=true + autoresizingMask [.width]，
-    /// 实际排版宽 = frame 宽 − 2×inset，正文随窗口变宽自动变宽；内边距为常量、不依赖
-    /// 当前宽度，故初始打开与拖拽 resize 都无需按宽度重算。字符定位（scrollToLine/
-    /// scrollToOutlineItem 等）全程只用 NSRange 偏移、不含 x 坐标假设，不受内边距影响。
+    /// 正文填满窗口：markdown-formatted 用略宽的对称内边距（32pt 横 / 16pt 纵）；
+    /// 其余模式（JSON/源码/文本等编辑器形态）用紧凑内边距（4pt 横 / 6pt 纵）——
+    /// 横向实际留白 = inset 4pt + NSTextContainer lineFragmentPadding 5pt = 9pt，
+    /// 与 gutter 分隔线保持贴近而不粘连。textView 走 widthTracksTextView=true +
+    /// autoresizingMask [.width]，实际排版宽 = frame 宽 − 2×inset，正文随窗口变宽
+    /// 自动变宽；内边距为常量、不依赖当前宽度，故初始打开与拖拽 resize 都无需按
+    /// 宽度重算。字符定位（scrollToLine/scrollToOutlineItem 等）全程只用 NSRange
+    /// 偏移、不含 x 坐标假设，不受内边距影响。
     private func applyMarkdownReadingColumn(isActive: Bool) {
-        let margin: CGFloat = isActive ? 32 : 18
-        textView.textContainerInset = NSSize(width: margin, height: 16)
+        textView.textContainerInset = isActive
+            ? NSSize(width: 32, height: 16)
+            : NSSize(width: 4, height: 6)
     }
 
     // MARK: - 高亮接入（R4e）：Dark Modern 主题 + 分块原位上色
