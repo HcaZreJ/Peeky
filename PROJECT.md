@@ -9,6 +9,7 @@
 | 多窗口 + 窗口内多 tab（key window 复用路由） | ✅ |
 | `peeky://open?path=&line=&cwd=` scheme（行列跳转）/ CLI `path:line[:column]` 直开 | ✅ |
 | repo-aware 文件树侧栏（RepoRoot 发现 + DirectoryLister 惰性枚举） | ✅ |
+| 侧栏 Open / Files / Contents 三 tab 一键切换（同一时刻只显示一区；Contents 仅 markdown 大纲非空时可用，否则置灰回落 Files；选择经 UserDefaults 全局记忆） | ✅ |
 | `peek` CLI（bin/peek，build-app.sh --install 联动安装） | ✅ |
 | Markdown：swift-markdown 解析 → HTML（`MarkdownHTMLRenderer`），WKWebView + 内嵌真 github-markdown-css 渲染，GFM 全特性像素级对齐 github（表格/任务列表/嵌套引用/围栏代码块/标题底线等）+ 可点击大纲侧栏；选中复制走 WebView 原生；代码块语法高亮见 issue #16 | ✅ |
 | JSON/JSONL：pretty-print 缩进 + 语义分色（key/字符串/数字/bool/null/标点）+ 原生选中复制 ⌘C，可视区惰性上色（NSLayoutManager temporary attributes，只算屏幕可见行）扛几万行大文件，跟随系统 light/dark，坏行红标 | ✅ |
