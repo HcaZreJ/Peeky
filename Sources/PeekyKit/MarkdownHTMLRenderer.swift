@@ -162,8 +162,7 @@ private final class MarkdownHTMLVisitor: MarkupVisitor {
             MarkdownOutlineItem(
                 level: heading.level,
                 title: MarkdownHTMLRenderer.plainText(of: heading),
-                sourceLine: heading.range?.lowerBound.line ?? 0,
-                renderedLocation: nil
+                sourceLine: heading.range?.lowerBound.line ?? 0
             )
         )
 
