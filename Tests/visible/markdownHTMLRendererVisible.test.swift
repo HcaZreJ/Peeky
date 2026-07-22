@@ -53,6 +53,54 @@ struct Visible_markdownHTMLRenderer {
         #expect(html.contains("let x = 1"))
     }
 
+    @Test("顶部 YAML frontmatter 剥离为 <dl> 键值表：inline scalar 直接展示，含裸引号 value 被容忍")
+    func test_markdownHTMLRenderer_extractsFrontmatterInlineScalars() throws {
+        let markdown = """
+            ---
+            name: Explore
+            description: Search agent — accepts "medium" or "very thorough" breadth
+            ---
+
+            正文段落。
+            """
+        let result = MarkdownHTMLRenderer.renderWithOutline(markdown)
+
+        #expect(result.html.contains("<dl class=\"peeky-frontmatter\">"))
+        #expect(result.html.contains("<dt class=\"peeky-fm-key\">name</dt>"))
+        #expect(result.html.contains("<dd class=\"peeky-fm-value\">Explore</dd>"))
+        #expect(result.html.contains("<dt class=\"peeky-fm-key\">description</dt>"))
+        #expect(result.html.contains("\"medium\""))
+        #expect(result.html.contains("\"very thorough\""))
+        #expect(result.html.contains("<p>正文段落。</p>"))
+        #expect(!result.html.contains("<h2"))
+        #expect(!result.html.contains("<hr>"))
+        #expect(result.outline.isEmpty)
+    }
+
+    @Test("嵌套 YAML frontmatter 的 block value 降级为 <pre class=peeky-fm-block> 分色源码块")
+    func test_markdownHTMLRenderer_extractsFrontmatterNestedBlockValue() throws {
+        let markdown = """
+            ---
+            name: fn
+            hooks:
+              PreToolUse:
+                - matcher: "Read|Glob"
+            ---
+
+            body
+            """
+        let result = MarkdownHTMLRenderer.renderWithOutline(markdown)
+
+        #expect(result.html.contains("<dt class=\"peeky-fm-key\">hooks</dt>"))
+        #expect(result.html.contains("<pre class=\"peeky-fm-block\">"))
+        #expect(result.html.contains("<span class=\"peeky-fm-nested-key\">PreToolUse</span>"))
+        #expect(result.html.contains("<span class=\"peeky-fm-dash\">- </span>"))
+        #expect(result.html.contains("<span class=\"peeky-fm-nested-key\">matcher</span>"))
+        #expect(result.html.contains("\"Read|Glob\""))
+        // 顶级扁平 pair 仍走 inline scalar
+        #expect(result.html.contains("<dd class=\"peeky-fm-value\">fn</dd>"))
+    }
+
     @Test("renderWithOutline 提取的大纲与 html 标题 id 对应；documentHTML 组装出完整文档骨架")
     func test_markdownHTMLRenderer_outlineAndDocumentHTMLAssembly() throws {
         let result = MarkdownHTMLRenderer.renderWithOutline("# One\n\n## Two\n\n### Three")

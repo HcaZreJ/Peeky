@@ -11,7 +11,8 @@ struct MarkdownOutlineItem {
 /// 在 AST→HTML 遍历中直接产大纲，本入口是纯文本 raw 兜底走的独立解析入口。
 enum MarkdownRenderer {
     static func outline(in text: String) -> [MarkdownOutlineItem] {
-        let document = Document(parsing: text, options: [.disableSmartOpts])
+        let body = MarkdownHTMLRenderer.extractFrontmatter(text).body
+        let document = Document(parsing: body, options: [.disableSmartOpts])
         var items: [MarkdownOutlineItem] = []
         for child in document.children {
             collectOutline(child, into: &items)

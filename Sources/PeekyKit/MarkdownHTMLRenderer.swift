@@ -15,10 +15,162 @@ enum MarkdownHTMLRenderer {
     /// GFM markdown → (内层 HTML, 标题大纲)。h1–h4 标题按文档顺序赋 `id="heading-N"`，
     /// 序号 N 与 `outline` 数组下标一致，供大纲项 → `#heading-N` 跳转。
     static func renderWithOutline(_ markdown: String) -> (html: String, outline: [MarkdownOutlineItem]) {
-        let document = Document(parsing: markdown, options: [.disableSmartOpts])
+        let extracted = extractFrontmatter(markdown)
+        let document = Document(parsing: extracted.body, options: [.disableSmartOpts])
         let visitor = MarkdownHTMLVisitor()
-        let html = document.children.map { visitor.visit($0) }.joined()
-        return (html, visitor.outline)
+        let bodyHTML = document.children.map { visitor.visit($0) }.joined()
+        return (extracted.html + bodyHTML, visitor.outline)
+    }
+
+    /// 顶部 YAML frontmatter (`---\n…\n---`) 剥离：命中则解析为 `key → 值` 序列
+    /// （scalar / 缩进 `- item` 列表）并渲染为 `<dl class="peeky-frontmatter">`；
+    /// 剩余 markdown 作为 body。行级 tokenize，不做完整 YAML 解析，容忍未加引号
+    /// value 中的裸引号（agent md 常见写法）。仅当首行严格顶格 `---` 且能找到闭合
+    /// `---` 时生效；其它情况返回空 HTML 与原文。
+    static func extractFrontmatter(_ markdown: String) -> (html: String, body: String) {
+        let lines = markdown.components(separatedBy: "\n")
+        guard let first = lines.first, isFrontmatterFence(first) else {
+            return ("", markdown)
+        }
+        var closing: Int?
+        for index in 1..<lines.count where isFrontmatterFence(lines[index]) {
+            closing = index
+            break
+        }
+        guard let closingIndex = closing else { return ("", markdown) }
+
+        let frontmatterLines = lines[1..<closingIndex].map { stripCR($0) }
+        let pairs = parseFrontmatterPairs(frontmatterLines)
+        let html = renderFrontmatterHTML(pairs)
+        let restJoined = lines[(closingIndex + 1)...].joined(separator: "\n")
+        let body = String(restJoined.drop { $0 == "\n" })
+        return (html, body)
+    }
+
+    fileprivate struct FrontmatterPair {
+        let key: String
+        let inlineValue: String
+        let blockLines: [String]
+    }
+
+    /// 顶级 key 一行一开：无前导缩进、`key:` 前段为合法 key 名的行起新 pair；其余
+    /// 行（含空行、缩进 `- item`、缩进 `nested:` 等）作为原文续行归入当前 pair 的
+    /// blockLines。不做嵌套结构还原——嵌套 block 交给渲染层按原文分色展示。
+    private static func parseFrontmatterPairs(_ lines: [String]) -> [FrontmatterPair] {
+        var pairs: [FrontmatterPair] = []
+        var currentKey: String?
+        var currentInline: String = ""
+        var currentBlock: [String] = []
+
+        func flush() {
+            guard let key = currentKey else { return }
+            var trimmed = currentBlock
+            while let last = trimmed.last, last.trimmingCharacters(in: .whitespaces).isEmpty {
+                trimmed.removeLast()
+            }
+            pairs.append(FrontmatterPair(key: key, inlineValue: currentInline, blockLines: trimmed))
+            currentKey = nil
+            currentInline = ""
+            currentBlock = []
+        }
+
+        for line in lines {
+            if !line.hasPrefix(" "), !line.hasPrefix("\t"),
+               let colonIdx = line.firstIndex(of: ":"),
+               isValidFrontmatterKey(String(line[..<colonIdx]).trimmingCharacters(in: .whitespaces)) {
+                flush()
+                currentKey = String(line[..<colonIdx]).trimmingCharacters(in: .whitespaces)
+                currentInline = String(line[line.index(after: colonIdx)...])
+                    .trimmingCharacters(in: .whitespaces)
+                continue
+            }
+            if currentKey != nil {
+                currentBlock.append(line)
+            }
+        }
+        flush()
+        return pairs
+    }
+
+    private static func isValidFrontmatterKey(_ key: String) -> Bool {
+        guard let first = key.first else { return false }
+        guard first.isLetter || first == "_" else { return false }
+        return key.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+    }
+
+    private static func renderFrontmatterHTML(_ pairs: [FrontmatterPair]) -> String {
+        guard !pairs.isEmpty else { return "" }
+        let rows = pairs.map { pair -> String in
+            let key = "<dt class=\"peeky-fm-key\">\(escapeText(pair.key))</dt>"
+            if pair.blockLines.isEmpty {
+                let value = pair.inlineValue.isEmpty ? "" : escapeText(pair.inlineValue)
+                return key + "<dd class=\"peeky-fm-value\">\(value)</dd>"
+            }
+            var lines: [String] = []
+            if !pair.inlineValue.isEmpty {
+                lines.append("<span class=\"peeky-fm-value-scalar\">\(escapeText(pair.inlineValue))</span>")
+            }
+            lines.append(contentsOf: pair.blockLines.map(highlightYAMLLine))
+            let body = lines.joined(separator: "\n")
+            return key + "<dd class=\"peeky-fm-value peeky-fm-value-block\"><pre class=\"peeky-fm-block\">\(body)</pre></dd>"
+        }.joined()
+        return "<dl class=\"peeky-frontmatter\">\(rows)</dl>"
+    }
+
+    /// 行级 YAML 分色：拆出可选的前导缩进、可选的 `- ` list dash、可选的
+    /// `nested-key:`（合法 key 名 + 冒号 + 一个空格），剩余作为 scalar value。
+    /// 不解析引号/嵌套结构——只按词法 token 上色，让原文缩进与结构保持可读。
+    private static func highlightYAMLLine(_ rawLine: String) -> String {
+        let line = stripCR(rawLine)
+        if line.isEmpty { return "" }
+
+        var cursor = line.startIndex
+        var output = ""
+
+        while cursor < line.endIndex, line[cursor] == " " || line[cursor] == "\t" {
+            cursor = line.index(after: cursor)
+        }
+        if cursor > line.startIndex {
+            output += "<span class=\"peeky-fm-indent\">\(escapeText(String(line[line.startIndex..<cursor])))</span>"
+        }
+
+        let afterIndent = line[cursor...]
+        if afterIndent.hasPrefix("- ") {
+            output += "<span class=\"peeky-fm-dash\">- </span>"
+            cursor = line.index(cursor, offsetBy: 2)
+        }
+
+        let rest = String(line[cursor...])
+        if !rest.isEmpty, let colonIdx = rest.firstIndex(of: ":") {
+            let keyPart = String(rest[..<colonIdx])
+            let keyTrimmed = keyPart.trimmingCharacters(in: .whitespaces)
+            if isValidFrontmatterKey(keyTrimmed) {
+                output += "<span class=\"peeky-fm-nested-key\">\(escapeText(keyPart))</span>"
+                output += "<span class=\"peeky-fm-colon\">:</span>"
+                var afterColon = String(rest[rest.index(after: colonIdx)...])
+                if afterColon.hasPrefix(" ") {
+                    output += " "
+                    afterColon = String(afterColon.dropFirst())
+                }
+                if !afterColon.isEmpty {
+                    output += "<span class=\"peeky-fm-value-scalar\">\(escapeText(afterColon))</span>"
+                }
+                return output
+            }
+        }
+
+        if !rest.isEmpty {
+            output += "<span class=\"peeky-fm-value-scalar\">\(escapeText(rest))</span>"
+        }
+        return output
+    }
+
+    private static func isFrontmatterFence(_ line: String) -> Bool {
+        stripCR(line) == "---"
+    }
+
+    private static func stripCR(_ line: String) -> String {
+        line.hasSuffix("\r") ? String(line.dropLast()) : line
     }
 
     /// 组装完整 HTML 文档：内嵌 css + 包装样式 + `.markdown-body` 容器 + 极简滚动 JS。
@@ -36,6 +188,26 @@ enum MarkdownHTMLRenderer {
         @media (prefers-color-scheme: dark){body{background-color:#0d1117}}
         .markdown-body{box-sizing:border-box;max-width:980px;margin:0 auto;padding:32px 24px}
         .markdown-body img{max-width:100%}
+        .markdown-body .peeky-frontmatter{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;padding:12px 16px;margin:0 0 16px;background-color:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:85%;line-height:1.5}
+        .markdown-body .peeky-frontmatter dt.peeky-fm-key,
+        .markdown-body .peeky-frontmatter .peeky-fm-nested-key{color:#953800;font-weight:600}
+        .markdown-body .peeky-frontmatter dt.peeky-fm-key{margin:0}
+        .markdown-body .peeky-frontmatter dd.peeky-fm-value{color:#0a3069;margin:0;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+        .markdown-body .peeky-frontmatter dd.peeky-fm-value-block{white-space:normal;word-break:normal;overflow-wrap:normal}
+        .markdown-body .peeky-frontmatter pre.peeky-fm-block{margin:0;padding:0;background:transparent;border:0;border-radius:0;white-space:pre;overflow-x:auto;font:inherit;color:inherit;line-height:inherit}
+        .markdown-body .peeky-frontmatter .peeky-fm-value-scalar{color:#0a3069}
+        .markdown-body .peeky-frontmatter .peeky-fm-colon,
+        .markdown-body .peeky-frontmatter .peeky-fm-dash{color:#6e7781}
+        .markdown-body .peeky-frontmatter .peeky-fm-indent{color:transparent}
+        @media (prefers-color-scheme: dark){
+          .markdown-body .peeky-frontmatter{background-color:#161b22;border-color:#30363d}
+          .markdown-body .peeky-frontmatter dt.peeky-fm-key,
+          .markdown-body .peeky-frontmatter .peeky-fm-nested-key{color:#ffa657}
+          .markdown-body .peeky-frontmatter dd.peeky-fm-value,
+          .markdown-body .peeky-frontmatter .peeky-fm-value-scalar{color:#a5d6ff}
+          .markdown-body .peeky-frontmatter .peeky-fm-colon,
+          .markdown-body .peeky-frontmatter .peeky-fm-dash{color:#8b949e}
+        }
         </style>
         </head>
         <body><article class="markdown-body">\(bodyHTML)</article></body>
