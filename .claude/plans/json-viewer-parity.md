@@ -179,4 +179,4 @@ F3 ──────────► F4, F5
 - 交付时更新 PROJECT.md（JSON/JSONL 功能行与关键决策）、PATTERNS.md（如新增展示配置注入范式）。
 
 ## Status
-Awaiting user approval（BACKLOG 已摆出，等待批准后派发）
+Implemented — F1–F6 全部交付（280 例测试全绿），等待用户目检验收（F7）；工具栏按钮延后至 issues #21–#24
