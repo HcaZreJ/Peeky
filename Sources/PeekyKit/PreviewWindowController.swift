@@ -306,6 +306,15 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let gutterView = PreviewGutterView()
     private let textView = DropTextView()
     private let emptyView = NSStackView()
+    /// 底部状态栏（Ln/Col/选中数/size）：所有 textView 类模式启用，markdown WebView /
+    /// 空态 / 错误态隐藏（见 setStatusBarVisible）。
+    private let statusBarView = NSView()
+    private let statusBarLeftLabel = NSTextField(labelWithString: "")
+    private let statusBarRightLabel = NSTextField(labelWithString: "")
+    /// scrollView 底部两套互斥约束：statusBar 可见时钉到其顶部，隐藏时回落 contentView
+    /// 底部；同一时刻只有一条 isActive，防重复激活冲突。
+    private var scrollViewBottomToStatusBarConstraint: NSLayoutConstraint?
+    private var scrollViewBottomToContentConstraint: NSLayoutConstraint?
     /// markdown 专用渲染面：WKWebView + 真 github-markdown-css（像素级对齐 github）。
     /// 与编辑器 scrollView 同区叠放，仅 markdown 显示。属性初始化即创建，
     /// 让 WebContent 进程尽早预热，首次打开 markdown 近乎即时。
@@ -336,6 +345,36 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// 此清理只是摘掉注册在 NotificationCenter 的 token，无跨线程数据竞争，
     /// nonisolated(unsafe) 据实况解除隔离检查。
     private nonisolated(unsafe) var jsonHighlightScrollObserver: NSObjectProtocol?
+    /// textView 选区变化观察 token（状态栏 Ln/Col/选中数刷新）；controller 未作为
+    /// NSTextViewDelegate，走 NotificationCenter 监听，deinit 清理同上。
+    private nonisolated(unsafe) var textViewSelectionObserver: NSObjectProtocol?
+    /// 当前渲染为 JSON/JSONL formatted（usesJSONHighlighting）时的折叠上下文：
+    /// foldSourceText 为完整 pretty 全文，foldMap 为其折叠结构索引，collapsedFoldIDs 为
+    /// 已折叠的 FoldRegion.id 集合，foldComposition 为按当前 collapsed 合成的可见态。
+    /// 非 JSON 模式（或折叠尚未就绪）全 nil/空，gutterView.foldDisplay /
+    /// textView.foldOverlay 同步清 nil，行为与改动前完全一致。
+    private var foldSourceText: String?
+    private var foldMap: JSONFoldMap?
+    private var collapsedFoldIDs: Set<Int> = []
+    private var foldComposition: FoldComposition?
+    /// 折叠合成前的原始（源坐标）display：JSONL `.markers` 模式的 gutter markers /
+    /// 记录分隔线 / 坏行区间据此在每次 applyFoldState() 时经 visibleRange(forSource:)
+    /// remap；`.lineNumbers` 模式不需要它（直接用可见文本重建）。
+    private var foldOriginalDisplay: PreviewDisplayMetadata?
+    /// 每次新渲染落地（beginFoldContext/clearFoldContext）递增；折叠相关的后台任务
+    /// （foldMap.build / >2MB compose）完成时校验代际未过期才落地，防止 tab 切换/
+    /// 重新渲染后迟到的结果覆盖新内容。
+    private var foldRenderGeneration = 0
+    /// 每次 applyFoldState() 调用递增；解决同一渲染代际内快速连续折叠/展开时，
+    /// 先发出的旧后台合成结果晚到达而覆盖新结果的竞态。
+    private var foldComposeSequence = 0
+    /// 状态栏 Ln/Col 计算用的源坐标行起点表：JSON/JSONL 折叠上下文下取 foldSourceText
+    /// 的行表（折叠只改可见范围、不改源文本行号，故与 collapsedFoldIDs 无关、渲染落地时
+    /// 建一次即可）；非折叠模式取当前 textView 内容本身的行表。
+    private var statusBarSourceLineStarts: [Int] = [0]
+    /// 状态栏右侧 "size: X.XX KB/MB" 文案；渲染落地时按文档字节数算一次，selection
+    /// 变化时直接复用（避免每次选区变化重算）。
+    private var statusBarSizeText: String = ""
     /// 递增即作废在途布局泵；每次内容或换行模式变化后 startLayoutPump() 重启。
     private var layoutPumpGeneration = 0
     /// 递增即作废在途高亮分块流；tab 切换/关闭/重新渲染时 invalidateHighlighting() 推进，
@@ -461,11 +500,17 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         rootView.addSubview(contentView)
         setupHeader()
         setupTextView()
+        setupStatusBar()
         setupMarkdownWebView()
         setupEmptyView()
 
         let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: 210)
         self.sidebarWidthConstraint = sidebarWidthConstraint
+
+        let scrollViewBottomToStatusBar = scrollView.bottomAnchor.constraint(equalTo: statusBarView.topAnchor)
+        let scrollViewBottomToContent = scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+        scrollViewBottomToStatusBarConstraint = scrollViewBottomToStatusBar
+        scrollViewBottomToContentConstraint = scrollViewBottomToContent
 
         NSLayoutConstraint.activate([
             sidebarView.topAnchor.constraint(equalTo: rootView.topAnchor),
@@ -491,12 +536,16 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             scrollView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
             markdownWebView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
             markdownWebView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             markdownWebView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             markdownWebView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+
+            statusBarView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            statusBarView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            statusBarView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            statusBarView.heightAnchor.constraint(equalToConstant: 22),
 
             emptyView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
             emptyView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor)
@@ -854,6 +903,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         scrollView.hasVerticalRuler = true
         scrollView.verticalRulerView = gutterView
         gutterView.connect(textView: textView, scrollView: scrollView)
+        gutterView.onToggleFold = { [weak self] visibleLine in
+            self?.toggleFold(atVisibleLine: visibleLine)
+        }
 
         // 滚动即重算可见区语义分色：观察 clip view 的 bounds 变更。
         // setTemporaryAttributes 不改 bounds，故此回调不成循环。
@@ -870,11 +922,61 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
                 self?.applyVisibleJSONHighlighting()
             }
         }
+
+        // 状态栏 Ln/Col/选中数随选区变化刷新；controller 未作为 NSTextViewDelegate，
+        // 走 NotificationCenter（同上 boundsDidChange 的 assumeIsolated 论证）。
+        textViewSelectionObserver = NotificationCenter.default.addObserver(
+            forName: NSTextView.didChangeSelectionNotification,
+            object: textView,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.updateStatusBar()
+            }
+        }
+    }
+
+    /// 底部状态栏：左侧 Ln/Col/选中数，右侧文件 size；纯背景色块（非 vibrancy），色走
+    /// PeekyTheme，见 applyStatusBarColors。默认隐藏，显示态由各渲染路径显式切换
+    /// （见 setStatusBarVisible）。
+    private func setupStatusBar() {
+        statusBarView.translatesAutoresizingMaskIntoConstraints = false
+        statusBarView.wantsLayer = true
+        contentView.addSubview(statusBarView)
+
+        statusBarLeftLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        statusBarLeftLabel.lineBreakMode = .byTruncatingTail
+        statusBarLeftLabel.maximumNumberOfLines = 1
+
+        statusBarRightLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        statusBarRightLabel.lineBreakMode = .byTruncatingTail
+        statusBarRightLabel.maximumNumberOfLines = 1
+        statusBarRightLabel.alignment = .right
+        statusBarRightLabel.setContentHuggingPriority(.required, for: .horizontal)
+        statusBarRightLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let statusBarStack = NSStackView(views: [statusBarLeftLabel, statusBarRightLabel])
+        statusBarStack.orientation = .horizontal
+        statusBarStack.distribution = .equalSpacing
+        statusBarStack.alignment = .centerY
+        statusBarStack.translatesAutoresizingMaskIntoConstraints = false
+        statusBarView.addSubview(statusBarStack)
+
+        NSLayoutConstraint.activate([
+            statusBarStack.leadingAnchor.constraint(equalTo: statusBarView.leadingAnchor, constant: 10),
+            statusBarStack.trailingAnchor.constraint(equalTo: statusBarView.trailingAnchor, constant: -10),
+            statusBarStack.centerYAnchor.constraint(equalTo: statusBarView.centerYAnchor)
+        ])
+
+        applyStatusBarColors()
     }
 
     deinit {
         if let jsonHighlightScrollObserver {
             NotificationCenter.default.removeObserver(jsonHighlightScrollObserver)
+        }
+        if let textViewSelectionObserver {
+            NotificationCenter.default.removeObserver(textViewSelectionObserver)
         }
     }
 
@@ -1059,6 +1161,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private func renderActiveTab() {
         invalidateHighlighting()
+        clearFoldContext()
 
         guard let tab = activeTab else {
             showEmptyState()
@@ -1111,10 +1214,13 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         if rendered.usesJSONHighlighting {
             activeJSONText = rendered.attributedText.string
             activeInvalidRanges = rendered.display.invalidRecordRanges
-        } else {
-            activeJSONText = nil
-            activeInvalidRanges = []
+            beginFoldContext(sourceText: rendered.attributedText.string, originalDisplay: rendered.display, tabID: tabID)
         }
+        // 非 JSON 分支：activeJSONText/activeInvalidRanges/折叠上下文已由
+        // renderActiveTab() 顶部的 clearFoldContext() 清空，此处无需重复置空。
+        statusBarSourceLineStarts = foldSourceText.map { PreviewDisplayMetadata.lineStartLocations(in: $0) }
+            ?? PreviewDisplayMetadata.lineStartLocations(in: rendered.attributedText.string)
+        statusBarSizeText = "size: \(Self.formattedFileSize(totalBytes: document.totalBytes))"
         applyEditorTheme(
             followsSystemAppearance: rendered.followsSystemAppearance,
             usesDarkModern: rendered.usesDarkModernTheme
@@ -1160,6 +1266,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         showPlainText()
         applyVisibleJSONHighlighting()
+        setStatusBarVisible(true)
+        updateStatusBar()
     }
 
     private func renderError(message: String, url: URL) {
@@ -1178,6 +1286,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         applyLineWrapping()
         applyMarkdownReadingColumn(isActive: isMarkdownReadingColumnActive)
         startLayoutPump()
+        setStatusBarVisible(false)
     }
 
     /// 恒单 textView 视图：显示编辑器 scrollView（含 textView + 行号 gutter）。
@@ -1224,6 +1333,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         showPreviewState()
         showMarkdownWeb()
+        setStatusBarVisible(false)
     }
 
     /// WebView 载入完成：若有待定源行，滚到 sourceLine 不超过它的最后一个标题（就近定位）。
@@ -1247,6 +1357,415 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func applyDisplayMetadata(_ display: PreviewDisplayMetadata) {
         gutterView.configuration = display.gutter
         textView.overlayConfiguration = display.textOverlay
+    }
+
+    // MARK: - 折叠管线（F6）：collapsed 状态持有 + 重组显示 + 双击选区/复制注入
+
+    /// 新渲染落地为 JSON/JSONL formatted 时建立折叠上下文：collapsed 清空，后台线程
+    /// build 折叠索引，回主线程存 foldMap 并跑一次 applyFoldState() 建立初始（恒等）
+    /// 合成态——gutter 从此带三角/跳号，正文带缩进导轨，像素上与之前完全一致
+    /// （collapsed 为空时 compose 恒等）。tabID + foldRenderGeneration 双重代际校验，
+    /// 防止 tab 切换/重新渲染后迟到的 build 结果覆盖新内容。
+    private func beginFoldContext(sourceText: String, originalDisplay: PreviewDisplayMetadata, tabID: UUID) {
+        foldSourceText = sourceText
+        foldOriginalDisplay = originalDisplay
+        collapsedFoldIDs = []
+        foldMap = nil
+        foldComposition = nil
+        foldRenderGeneration += 1
+        let generation = foldRenderGeneration
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let builtMap = JSONFoldMap.build(prettyText: sourceText)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard self.foldRenderGeneration == generation, self.activeTabID == tabID else { return }
+                self.foldMap = builtMap
+                self.applyFoldState()
+            }
+        }
+    }
+
+    /// 折叠上下文全清（含 activeJSONText/activeInvalidRanges，两者与 usesJSONHighlighting
+    /// 门控一致）：非 JSON 模式下 gutter/正文均不带折叠注入面，可见区分色整体跳过，
+    /// 行为与改动前完全一致。
+    private func clearFoldContext() {
+        foldSourceText = nil
+        foldOriginalDisplay = nil
+        foldMap = nil
+        foldComposition = nil
+        collapsedFoldIDs = []
+        foldRenderGeneration += 1
+        activeJSONText = nil
+        activeInvalidRanges = []
+        gutterView.foldDisplay = nil
+        textView.foldOverlay = nil
+    }
+
+    /// gutter 折叠三角点击：可见行 → 源行（无 composition 时恒等）→ 命中 openLine 的
+    /// region → toggle 其 id 进/出 collapsedFoldIDs → 重组显示。
+    private func toggleFold(atVisibleLine visibleLine: Int) {
+        guard let foldMap else { return }
+
+        let sourceLine: Int
+        if let composition = foldComposition, visibleLine >= 0, visibleLine < composition.visibleLineToSourceLine.count {
+            sourceLine = composition.visibleLineToSourceLine[visibleLine]
+        } else {
+            sourceLine = visibleLine
+        }
+
+        guard let region = foldMap.regions.first(where: { $0.openLine == sourceLine }) else { return }
+
+        if collapsedFoldIDs.contains(region.id) {
+            collapsedFoldIDs.remove(region.id)
+        } else {
+            collapsedFoldIDs.insert(region.id)
+        }
+
+        applyFoldState()
+    }
+
+    /// 重组显示：记住重组前视口首行的源行号，按当前 collapsedFoldIDs 合成新可见态
+    /// （≤2MB 主线程直算，>2MB 后台算完回主线程），落地后把视口映射回新可见行滚动
+    /// 保持。foldComposeSequence + foldRenderGeneration + activeTabID 三重代际校验，
+    /// 快速连续折叠/展开时旧结果不会覆盖新结果。
+    private func applyFoldState() {
+        guard let foldSourceText, let foldMap, foldOriginalDisplay != nil else { return }
+
+        let priorVisibleLine = currentVisibleLineIndex()
+        let priorSourceLine: Int
+        if let composition = foldComposition, priorVisibleLine < composition.visibleLineToSourceLine.count {
+            priorSourceLine = composition.visibleLineToSourceLine[priorVisibleLine]
+        } else {
+            priorSourceLine = priorVisibleLine
+        }
+
+        foldComposeSequence += 1
+        let sequence = foldComposeSequence
+        let renderGeneration = foldRenderGeneration
+        let tabID = activeTabID
+        let collapsed = collapsedFoldIDs
+
+        let sourceLength = (foldSourceText as NSString).length
+        if sourceLength <= 2_000_000 {
+            let composition = JSONFoldComposer.compose(sourceText: foldSourceText, foldMap: foldMap, collapsed: collapsed)
+            finishApplyFoldState(composition, priorSourceLine: priorSourceLine, sequence: sequence, renderGeneration: renderGeneration, tabID: tabID)
+        } else {
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                let composition = JSONFoldComposer.compose(sourceText: foldSourceText, foldMap: foldMap, collapsed: collapsed)
+                DispatchQueue.main.async {
+                    self?.finishApplyFoldState(composition, priorSourceLine: priorSourceLine, sequence: sequence, renderGeneration: renderGeneration, tabID: tabID)
+                }
+            }
+        }
+    }
+
+    private func finishApplyFoldState(
+        _ composition: FoldComposition,
+        priorSourceLine: Int,
+        sequence: Int,
+        renderGeneration: Int,
+        tabID: UUID?
+    ) {
+        guard
+            foldComposeSequence == sequence,
+            foldRenderGeneration == renderGeneration,
+            activeTabID == tabID
+        else { return }
+
+        foldComposition = composition
+        applyFoldComposition(composition)
+
+        let newVisibleLine = floorVisibleLineIndex(forSourceLine: priorSourceLine, in: composition.visibleLineToSourceLine)
+        scrollToVisibleLine(newVisibleLine, in: composition)
+    }
+
+    /// textStorage 整体替换为可见文本（沿用现有字体/基础前景铺色路径，折叠前后字体
+    /// 不变）；chip 占位逐个挂 attachment cell（不改字符，U+FFFC 已在 visibleText 中）；
+    /// gutter/正文注入面重建；activeJSONText/activeInvalidRanges 同步到可见坐标；
+    /// 布局泵 + 可见区语义分色照常跑。
+    private func applyFoldComposition(_ composition: FoldComposition) {
+        let storage = NSMutableAttributedString(attributedString: SyntaxHighlighter.monospace(composition.visibleText))
+        for chipRange in composition.chipRanges {
+            let attachment = NSTextAttachment()
+            attachment.attachmentCell = FoldChipAttachmentCell()
+            storage.addAttribute(.attachment, value: attachment, range: chipRange)
+        }
+        textView.textStorage?.setAttributedString(storage)
+        applyFollowSystemEditorColors()
+
+        updateFoldGutterAndOverlay(for: composition)
+
+        activeJSONText = composition.visibleText
+        activeInvalidRanges = remappedInvalidRanges(in: composition)
+
+        startLayoutPump()
+        applyVisibleJSONHighlighting()
+    }
+
+    /// gutter 配置（.lineNumbers 直接用可见文本重建；.markers 把原始 markers/记录分隔线/
+    /// 坏行区间逐个经 visibleRange(forSource:) remap）+ foldDisplay（跳号 + 三角状态）+
+    /// 正文 foldOverlay（缩进导轨 + 双击选区扩展表 + 复制映射）。
+    private func updateFoldGutterAndOverlay(for composition: FoldComposition) {
+        guard let foldMap else { return }
+
+        let lineStarts = PreviewDisplayMetadata.lineStartLocations(in: composition.visibleText)
+
+        var disclosures: [Int: GutterDisclosureState] = [:]
+        let regionsByOpenLine = Dictionary(uniqueKeysWithValues: foldMap.regions.map { ($0.openLine, $0) })
+        for (visibleLine, sourceLine) in composition.visibleLineToSourceLine.enumerated() {
+            guard let region = regionsByOpenLine[sourceLine] else { continue }
+            disclosures[visibleLine] = collapsedFoldIDs.contains(region.id) ? .collapsed : .expanded
+        }
+
+        switch foldOriginalDisplay?.gutter.mode {
+        case .markers(let originalMarkers):
+            let remappedMarkers = originalMarkers.compactMap { marker -> PreviewGutterMarker? in
+                guard
+                    let visible = JSONFoldComposer.visibleRange(
+                        forSource: NSRange(location: marker.characterLocation, length: 0),
+                        in: composition
+                    )
+                else { return nil }
+                return PreviewGutterMarker(characterLocation: visible.location, label: marker.label, isWarning: marker.isWarning)
+            }
+            gutterView.configuration = .markers(remappedMarkers)
+        default:
+            gutterView.configuration = .lineNumbers(for: composition.visibleText)
+        }
+
+        gutterView.foldDisplay = GutterFoldDisplay(
+            visibleLineToSourceLine: composition.visibleLineToSourceLine,
+            disclosures: disclosures,
+            lineStartLocations: lineStarts
+        )
+
+        let remappedSeparators = (foldOriginalDisplay?.textOverlay.recordSeparatorLocations ?? []).compactMap {
+            JSONFoldComposer.visibleRange(forSource: NSRange(location: $0, length: 0), in: composition)?.location
+        }
+        textView.overlayConfiguration = PreviewTextOverlayConfiguration(recordSeparatorLocations: remappedSeparators)
+
+        textView.foldOverlay = FoldOverlayConfiguration(
+            lineDepths: composition.visibleLineDepths,
+            lineStartLocations: lineStarts,
+            indentStepWidth: indentStepWidth(),
+            selectionExpansions: buildSelectionExpansions(composition: composition, foldMap: foldMap),
+            copyTransform: { [weak self] visibleRange in
+                self?.foldCopyTransform(visibleRange)
+            }
+        )
+    }
+
+    /// 原始（源坐标）坏行区间逐个经 visibleRange(forSource:) remap；落在折叠内容中的
+    /// 返回 chip 位置，照用（chip 本身呈红即代表其中含坏行）。
+    private func remappedInvalidRanges(in composition: FoldComposition) -> [NSRange] {
+        guard let originalRanges = foldOriginalDisplay?.invalidRecordRanges, !originalRanges.isEmpty else { return [] }
+        return originalRanges.compactMap { JSONFoldComposer.visibleRange(forSource: $0, in: composition) }
+    }
+
+    /// 双击选区扩展表（全部可见坐标）：
+    /// - 已折叠且未被外层吞并（effectiveCollapsed）的 region：trigger = 其 chip；
+    ///   selection = chip 所在可见行行首 到 close 括号（含）。
+    /// - 展开且未被祖先折叠吞并的 region：trigger = open 括号；selection = open 括号
+    ///   起到 close 括号（含）。
+    /// region 数 > 2000 时只对 openLine 落在当前可视行 ±5000 内的 region 生成（性能护栏）。
+    private func buildSelectionExpansions(
+        composition: FoldComposition,
+        foldMap: JSONFoldMap
+    ) -> [(trigger: NSRange, selection: NSRange)] {
+        let effectiveCollapsedRegions = effectivelyCollapsedRegions(foldMap: foldMap, collapsed: collapsedFoldIDs)
+
+        var regions = foldMap.regions
+        if regions.count > 2000 {
+            let anchorSourceLine = composition.visibleLineToSourceLine.first ?? 0
+            regions = regions.filter { abs($0.openLine - anchorSourceLine) <= 5000 }
+        }
+
+        let lineStarts = PreviewDisplayMetadata.lineStartLocations(in: composition.visibleText)
+        var expansions: [(trigger: NSRange, selection: NSRange)] = []
+
+        for region in regions {
+            let innerRange = region.innerCharRange
+            let closeBracketSource = NSRange(location: innerRange.location + innerRange.length, length: 1)
+            guard let closeVisible = JSONFoldComposer.visibleRange(forSource: closeBracketSource, in: composition) else {
+                continue
+            }
+            let selectionEnd = closeVisible.location + closeVisible.length
+
+            if effectiveCollapsedRegions.contains(where: { $0.id == region.id }) {
+                guard
+                    let chipVisible = JSONFoldComposer.visibleRange(forSource: innerRange, in: composition),
+                    chipVisible.length == 1
+                else { continue }
+                let lineIndex = lineStartIndex(for: chipVisible.location, in: lineStarts)
+                let lineStart = lineIndex < lineStarts.count ? lineStarts[lineIndex] : chipVisible.location
+                let selection = NSRange(location: lineStart, length: max(0, selectionEnd - lineStart))
+                expansions.append((trigger: chipVisible, selection: selection))
+            } else {
+                let isSwallowed = effectiveCollapsedRegions.contains { ancestor in
+                    ancestor.id != region.id
+                        && ancestor.openLine <= region.openLine
+                        && region.closeLine <= ancestor.closeLine
+                }
+                guard !isSwallowed else { continue }
+
+                let openBracketSource = NSRange(location: innerRange.location - 1, length: 1)
+                guard let openVisible = JSONFoldComposer.visibleRange(forSource: openBracketSource, in: composition) else {
+                    continue
+                }
+                let selection = NSRange(location: openVisible.location, length: max(0, selectionEnd - openVisible.location))
+                expansions.append((trigger: openVisible, selection: selection))
+            }
+        }
+
+        return expansions
+    }
+
+    /// 折叠生效集：collapsed 中存在于 foldMap 的区域，按行区间互不包含关系收敛到最外层
+    /// （镜像 JSONFoldComposer 的私有 effectiveRegions 逻辑，该函数未导出）。
+    private func effectivelyCollapsedRegions(foldMap: JSONFoldMap, collapsed: Set<Int>) -> [FoldRegion] {
+        let candidates = foldMap.regions.filter { collapsed.contains($0.id) }
+        guard !candidates.isEmpty else { return [] }
+        return candidates.filter { candidate in
+            !candidates.contains { other in
+                other.id != candidate.id
+                    && other.openLine <= candidate.openLine
+                    && candidate.closeLine <= other.closeLine
+            }
+        }
+    }
+
+    /// 复制映射：选区与任一 chip 相交才展开为完整底层源文本，否则 nil 走默认复制。
+    private func foldCopyTransform(_ visibleRange: NSRange) -> String? {
+        guard let composition = foldComposition, let foldSourceText else { return nil }
+        guard composition.chipRanges.contains(where: { NSIntersectionRange($0, visibleRange).length > 0 }) else {
+            return nil
+        }
+
+        let sourceRange = JSONFoldComposer.sourceRange(forVisible: visibleRange, in: composition)
+        let ns = foldSourceText as NSString
+        let clampedLocation = min(max(sourceRange.location, 0), ns.length)
+        let clampedLength = min(max(sourceRange.length, 0), ns.length - clampedLocation)
+        return ns.substring(with: NSRange(location: clampedLocation, length: clampedLength))
+    }
+
+    /// 一个缩进级（2 空格）在正文字体下的宽度。
+    private func indentStepWidth() -> CGFloat {
+        let font = textView.font ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
+        return (" " as NSString).size(withAttributes: [.font: font]).width * 2
+    }
+
+    /// 当前视口首个可见行在"当前显示文本"坐标系中的行号(0-based)；复用既有
+    /// lineStartIndex(for:in:) 的二分查找（floor 语义）。
+    private func currentVisibleLineIndex() -> Int {
+        guard
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer
+        else { return 0 }
+
+        let visibleGlyphRange = layoutManager.glyphRange(
+            forBoundingRectWithoutAdditionalLayout: textView.visibleRect,
+            in: textContainer
+        )
+        guard visibleGlyphRange.length > 0 else { return 0 }
+        let charRange = layoutManager.characterRange(forGlyphRange: visibleGlyphRange, actualGlyphRange: nil)
+
+        let lineStarts = gutterView.foldDisplay?.lineStartLocations
+            ?? PreviewDisplayMetadata.lineStartLocations(in: textView.string)
+        return lineStartIndex(for: charRange.location, in: lineStarts)
+    }
+
+    /// mapping 中最后一个 <= sourceLine 的下标（floor 二分），mapping 恒为
+    /// visibleLineToSourceLine（单调不降）。
+    private func floorVisibleLineIndex(forSourceLine sourceLine: Int, in mapping: [Int]) -> Int {
+        guard !mapping.isEmpty else { return 0 }
+
+        var low = 0
+        var high = mapping.count - 1
+        var match = 0
+
+        while low <= high {
+            let mid = (low + high) / 2
+            if mapping[mid] <= sourceLine {
+                match = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+
+        return match
+    }
+
+    /// 重组后把视口保持在 visibleLine：确保该行已布局后 scrollRangeToVisible（不含
+    /// showFindIndicator 高亮闪烁，这是内部视口保持，不是用户发起的导航）。
+    private func scrollToVisibleLine(_ visibleLine: Int, in composition: FoldComposition) {
+        let text = composition.visibleText as NSString
+        guard text.length > 0 else { return }
+
+        let lineStarts = gutterView.foldDisplay?.lineStartLocations
+            ?? PreviewDisplayMetadata.lineStartLocations(in: composition.visibleText)
+        let start = visibleLine >= 0 && visibleLine < lineStarts.count ? lineStarts[visibleLine] : 0
+        let lineRange = text.lineRange(for: NSRange(location: min(start, text.length), length: 0))
+        textView.layoutManager?.ensureLayout(forCharacterRange: lineRange)
+        textView.scrollRangeToVisible(lineRange)
+        gutterView.needsDisplay = true
+    }
+
+    // MARK: - 底部状态栏（F6）：Ln/Col/选中数/size
+
+    /// statusBar 可见性切换：isHidden + 两套 scrollView 底部约束 isActive 互斥切换，
+    /// 防重复激活冲突（AutoLayout 同一 attribute 两条 required 约束同时 active 会报错）。
+    private func setStatusBarVisible(_ visible: Bool) {
+        statusBarView.isHidden = !visible
+        scrollViewBottomToStatusBarConstraint?.isActive = visible
+        scrollViewBottomToContentConstraint?.isActive = !visible
+    }
+
+    /// 背景 statusBarBackground + 文字 statusBarText（11pt mono），按 textView 当前
+    /// effectiveAppearance 解析——Dark Modern/plain 等非跟随系统模式也统一按此取色，
+    /// 与编辑器区（尤其是钉死 darkAqua 的 Dark Modern）视觉一致。
+    private func applyStatusBarColors() {
+        let appearance = PeekyTheme.resolveAppearance(textView.effectiveAppearance)
+        statusBarView.layer?.backgroundColor = PeekyTheme.color(.statusBarBackground, appearance: appearance).cgColor
+        let textColor = PeekyTheme.color(.statusBarText, appearance: appearance)
+        statusBarLeftLabel.textColor = textColor
+        statusBarRightLabel.textColor = textColor
+    }
+
+    /// 左侧 "Ln X, Col Y"（+ 选中时追加 "N characters selected"）+ 右侧 "size: X.XX KB/MB"；
+    /// 行列/选中数按源坐标：selectedRange（可见）经 sourceRange(forVisible:) 映射
+    /// （无折叠上下文时恒等）。
+    private func updateStatusBar() {
+        guard !statusBarView.isHidden else { return }
+
+        let visibleSelection = textView.selectedRange()
+        let sourceSelection = foldComposition.map {
+            JSONFoldComposer.sourceRange(forVisible: visibleSelection, in: $0)
+        } ?? visibleSelection
+
+        let starts = statusBarSourceLineStarts
+        let lineIndex = lineStartIndex(for: sourceSelection.location, in: starts)
+        let line = lineIndex + 1
+        let lineStart = lineIndex < starts.count ? starts[lineIndex] : 0
+        let column = sourceSelection.location - lineStart + 1
+
+        var left = "Ln \(line), Col \(column)"
+        if sourceSelection.length > 0 {
+            left += "   \(sourceSelection.length) characters selected"
+        }
+
+        statusBarLeftLabel.stringValue = left
+        statusBarRightLabel.stringValue = statusBarSizeText
+    }
+
+    /// "X.XX KB"（<1MB）或 "X.XX MB"（≥1MB），字节数除 1024 两位小数。
+    private static func formattedFileSize(totalBytes: Int64) -> String {
+        let kilobytes = Double(totalBytes) / 1024
+        if kilobytes >= 1024 {
+            return String(format: "%.2f MB", kilobytes / 1024)
+        }
+        return String(format: "%.2f KB", kilobytes)
     }
 
     // MARK: - 限宽阅读列（R4f）：markdown formatted 模式正文列定宽居中
@@ -1300,6 +1819,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             gutterView.appearance = nil
             textView.backgroundColor = .textBackgroundColor
         }
+
+        applyStatusBarColors()
     }
 
     /// JSON/JSONL 跟随系统外观：按 textView 当前 effectiveAppearance 解析出 light/dark，
@@ -1323,6 +1844,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         applyFollowSystemEditorColors()
         gutterView.needsDisplay = true
         applyVisibleJSONHighlighting()
+        applyStatusBarColors()
     }
 
     /// JSON/JSONL 惰性语义分色：仅对屏幕可见区上色，绝不整文分词。求出可见字符范围后
@@ -1601,12 +2123,35 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
+    /// `line` 为源行语义（1-based）：无折叠上下文时直接对应 textView 当前内容的行；
+    /// 折叠态下经 `visibleLineToSourceLine` 反查落到可见行——目标行若在某折叠区内
+    /// （已被隐藏），floor 二分天然落到该区 openLine 对应的可见行。
     private func scrollToLine(_ line: Int) {
+        if let composition = foldComposition {
+            scrollToLine(line, in: composition)
+            return
+        }
+
         let text = textView.string as NSString
         guard text.length > 0 else { return }
 
         let location = characterOffset(forLine: line, in: text)
         let lineRange = text.lineRange(for: NSRange(location: location, length: 0))
+        textView.layoutManager?.ensureLayout(forCharacterRange: lineRange)
+        textView.scrollRangeToVisible(lineRange)
+        textView.showFindIndicator(for: lineRange)
+        gutterView.needsDisplay = true
+    }
+
+    private func scrollToLine(_ line: Int, in composition: FoldComposition) {
+        let text = composition.visibleText as NSString
+        guard text.length > 0 else { return }
+
+        let sourceLineIndex = max(line - 1, 0)
+        let visibleLine = floorVisibleLineIndex(forSourceLine: sourceLineIndex, in: composition.visibleLineToSourceLine)
+        let lineStarts = gutterView.foldDisplay?.lineStartLocations ?? PreviewDisplayMetadata.lineStartLocations(in: composition.visibleText)
+        let start = visibleLine >= 0 && visibleLine < lineStarts.count ? lineStarts[visibleLine] : 0
+        let lineRange = text.lineRange(for: NSRange(location: min(start, text.length), length: 0))
         textView.layoutManager?.ensureLayout(forCharacterRange: lineRange)
         textView.scrollRangeToVisible(lineRange)
         textView.showFindIndicator(for: lineRange)
@@ -1714,6 +2259,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         applyEditorTheme(followsSystemAppearance: false, usesDarkModern: false)
         applyMarkdownReadingColumn(isActive: isMarkdownReadingColumnActive)
         clearMarkdownOutline()
+        setStatusBarVisible(false)
     }
 
     private func showPreviewState() {
