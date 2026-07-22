@@ -12,7 +12,7 @@
 | `peek` CLI（bin/peek，build-app.sh --install 联动安装） | ✅ |
 | Markdown：swift-markdown 解析 → HTML（`MarkdownHTMLRenderer`），WKWebView + 内嵌真 github-markdown-css 渲染，GFM 全特性像素级对齐 github（表格/任务列表/嵌套引用/围栏代码块/标题底线等）+ 可点击大纲侧栏；选中复制走 WebView 原生；代码块语法高亮见 issue #16 | ✅ |
 | JSON/JSONL：pretty-print 缩进 + 语义分色（key/字符串/数字/bool/null/标点）+ 原生选中复制 ⌘C，可视区惰性上色（NSLayoutManager temporary attributes，只算屏幕可见行）扛几万行大文件，跟随系统 light/dark，坏行红标 | ✅ |
-| JSON/JSONL 查看器 codebeautify 样板对齐：gutter 折叠三角（点击折叠/展开，行号跳号）+ 折叠 chip `⟷` 占位 + 缩进虚线导轨 + 底部状态栏（Ln/Col/选中字符数/size，源坐标语义）+ 双击选中整 element + 折叠态复制展开为完整底层 JSON；折叠合成/坐标映射为纯函数（`JSONFoldMap`/`JSONFoldComposer`），配色 7 个新语义 token 入 `PeekyTheme` | ✅（用户目检验收中） |
+| JSON/JSONL 查看器 codebeautify 样板对齐：gutter 折叠三角（点击折叠/展开，行号跳号）+ 折叠 chip `⟷` 占位 + 缩进虚线导轨 + 底部状态栏（Ln/Col/选中字符数/size，源坐标语义）+ 双击选中整 element + 折叠态复制展开为完整底层 JSON；折叠合成/坐标映射为纯函数（`JSONFoldMap`/`JSONFoldComposer`），配色 7 个新语义 token 入 `PeekyTheme` | ✅ |
 | 源码语法高亮：JSC+Shiki，VSCode Dark Modern 原色，16 扩展名（py/ts/js/mjs/cjs/json/yaml/yml/toml/sh/bash/zsh/swift/ini/conf/config），流式分块上色 + 启动预热 + 超预算纯文本回退 | ✅ |
 | 行号 gutter（NSRulerView，viewport-only，折行仅首视觉行编号）+ 全文可选中 ⌘C | ✅ |
 | 复制五件套（全文 ⌥⌘C / 绝对路径 ⇧⌘C / 相对 repo root 路径 ⌥⇧⌘C / 文件本体 / path:line）+ ⌘E 用编辑器打开（VS Code/Cursor 带行定位） | ✅ |
