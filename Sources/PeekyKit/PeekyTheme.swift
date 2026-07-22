@@ -11,7 +11,7 @@ enum PeekyTheme {
         case dark
     }
 
-    /// 语义颜色 token：编辑器底/字、JSON 各词法元素、gutter、坏行。
+    /// 语义颜色 token：编辑器底/字、JSON 各词法元素、gutter、坏行、折叠/导轨/状态栏。
     enum ThemeColor {
         case editorBackground
         case editorForeground
@@ -25,6 +25,17 @@ enum PeekyTheme {
         case gutterText
         case invalidLineBackground
         case invalidLineForeground
+        /// 缩进导轨虚线
+        case indentGuide
+        /// 折叠 chip 占位（圆角底 / 描边 / 双向箭头字形）
+        case foldChipBackground
+        case foldChipBorder
+        case foldChipGlyph
+        /// 底部状态栏（Ln/Col/size）
+        case statusBarBackground
+        case statusBarText
+        /// gutter 折叠三角
+        case gutterDisclosure
     }
 
     // MARK: - Palette（配色常量表，换配色只改这里）
@@ -43,6 +54,13 @@ enum PeekyTheme {
         .gutterText: "#6E7681",
         .invalidLineForeground: "#F85149",
         .invalidLineBackground: "#F8514922",
+        .indentGuide: "#404040",
+        .foldChipBackground: "#3A3D41",
+        .foldChipBorder: "#525252",
+        .foldChipGlyph: "#D4D4D4",
+        .statusBarBackground: "#181818",
+        .statusBarText: "#CCCCCC",
+        .gutterDisclosure: "#A0A0A0",
     ]
 
     /// light：GitHub Light
@@ -59,6 +77,13 @@ enum PeekyTheme {
         .gutterText: "#8C959F",
         .invalidLineForeground: "#CF222E",
         .invalidLineBackground: "#CF222E1F",
+        .indentGuide: "#E1E4E8",
+        .foldChipBackground: "#EAEEF2",
+        .foldChipBorder: "#D0D7DE",
+        .foldChipGlyph: "#57606A",
+        .statusBarBackground: "#F6F8FA",
+        .statusBarText: "#424A53",
+        .gutterDisclosure: "#656D76",
     ]
 
     // MARK: - API
