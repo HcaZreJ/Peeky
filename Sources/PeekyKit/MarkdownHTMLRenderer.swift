@@ -188,13 +188,13 @@ enum MarkdownHTMLRenderer {
         @media (prefers-color-scheme: dark){body{background-color:#0d1117}}
         .markdown-body{box-sizing:border-box;max-width:980px;margin:0 auto;padding:32px 24px}
         .markdown-body img{max-width:100%}
-        .markdown-body .peeky-frontmatter{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px;padding:12px 16px;margin:0 0 16px;background-color:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:85%;line-height:1.5}
+        .markdown-body .peeky-frontmatter{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 16px;padding:12px 16px;margin:0 0 16px;background-color:#f6f8fa;border:1px solid #d0d7de;border-radius:6px;font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;font-size:85%;line-height:1.5}
         .markdown-body .peeky-frontmatter dt.peeky-fm-key,
         .markdown-body .peeky-frontmatter .peeky-fm-nested-key{color:#953800;font-weight:600}
-        .markdown-body .peeky-frontmatter dt.peeky-fm-key{margin:0}
-        .markdown-body .peeky-frontmatter dd.peeky-fm-value{color:#0a3069;margin:0;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
+        .markdown-body .peeky-frontmatter dt.peeky-fm-key{margin:0;min-width:0}
+        .markdown-body .peeky-frontmatter dd.peeky-fm-value{color:#0a3069;margin:0;min-width:0;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere}
         .markdown-body .peeky-frontmatter dd.peeky-fm-value-block{white-space:normal;word-break:normal;overflow-wrap:normal}
-        .markdown-body .peeky-frontmatter pre.peeky-fm-block{margin:0;padding:0;background:transparent;border:0;border-radius:0;white-space:pre;overflow-x:auto;font:inherit;color:inherit;line-height:inherit}
+        .markdown-body .peeky-frontmatter pre.peeky-fm-block{margin:0;padding:0;background:transparent;border:0;border-radius:0;max-width:100%;white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;font:inherit;color:inherit;line-height:inherit}
         .markdown-body .peeky-frontmatter .peeky-fm-value-scalar{color:#0a3069}
         .markdown-body .peeky-frontmatter .peeky-fm-colon,
         .markdown-body .peeky-frontmatter .peeky-fm-dash{color:#6e7781}
