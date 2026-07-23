@@ -86,25 +86,32 @@ private final class FileTabView: NSControl {
         closeButton.action = #selector(closeClicked(_:))
         closeButton.setContentHuggingPriority(.required, for: .horizontal)
         closeButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
 
-        let rowStack = NSStackView(views: [iconView, textStack, closeButton])
+        // close X 直接约束到 self（不进 rowStack）：所有 tab card 的 close 位置严格
+        // 一致（世界坐标 trailing/centerY 恒定），不随行内容/rowStack pack 布局浮动。
+        let rowStack = NSStackView(views: [iconView, textStack])
         rowStack.orientation = .horizontal
         rowStack.alignment = .centerY
         rowStack.spacing = 8
         rowStack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(rowStack)
+        addSubview(closeButton)
 
         NSLayoutConstraint.activate([
             rowStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            rowStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            rowStack.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -8),
             rowStack.topAnchor.constraint(equalTo: topAnchor, constant: 6),
             rowStack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
 
             iconView.widthAnchor.constraint(equalToConstant: 18),
             iconView.heightAnchor.constraint(equalToConstant: 18),
+
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             closeButton.widthAnchor.constraint(equalToConstant: 20),
             closeButton.heightAnchor.constraint(equalToConstant: 20),
-            heightAnchor.constraint(greaterThanOrEqualToConstant: 46)
+            heightAnchor.constraint(equalToConstant: 46)
         ])
 
         updateAppearance()
@@ -159,7 +166,6 @@ private final class FileTabView: NSControl {
         titleLabel.textColor = .labelColor
         subtitleLabel.textColor = isError ? .systemRed : .secondaryLabelColor
         closeButton.contentTintColor = .secondaryLabelColor
-        closeButton.alphaValue = isSelectedTab || isHovering ? 1 : 0.55
     }
 
     @objc private func closeClicked(_ sender: Any?) {
@@ -259,7 +265,7 @@ private final class FlippedStackView: NSStackView {
     override var isFlipped: Bool { true }
 }
 
-final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMenuDelegate, WKNavigationDelegate {
+final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMenuDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     var onOpenRequested: (() -> Void)?
     var onURLsDropped: (([URL]) -> Void)?
     var onClose: (() -> Void)?
@@ -272,6 +278,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let sidebarStack = NSStackView()
     private let fileTreeView = FileTreeView()
     private let tabStack = NSStackView()
+    private let closeAllRow = NSStackView()
+    private let closeAllButton = NSButton()
     private let outlineScrollView = NSScrollView()
     private let outlineStack = FlippedStackView()
     private let contentView = DropContainerView()
@@ -285,15 +293,22 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let titleLabel = NSTextField(labelWithString: "Peeky")
     private let metaLabel = NSTextField(labelWithString: "")
     private let modeControl = NSSegmentedControl(labels: ["Format", "Raw"], trackingMode: .selectOne, target: nil, action: nil)
-    private let wrapButton = NSButton()
-    private let copyButton = NSButton()
+    private let viewModeGroup = NSStackView()
+    private let copyContentButton = NSButton()
+    private let copyNameButton = NSButton()
+    private let copyAbsPathButton = NSButton()
+    private let copyRelPathButton = NSButton()
     private let revealButton = NSButton()
-    private let openButton = NSButton()
-    private let copyMenu = NSMenu()
-    private var copyRelativePathMenuItem: NSMenuItem?
+    private let overflowButton = NSButton()
+    private let overflowMenu = NSMenu()
+    private var wrapLinesMenuItem: NSMenuItem?
     private let scrollView = DropScrollView()
     private let gutterView = PreviewGutterView()
     private let textView = DropTextView()
+    /// 选区触发的浮动 Copy Path:Line 按钮：住在 scrollView.contentView 顶层，不参与
+    /// 文档滚动；位置由 updateSelectionActionButton() 主动同步（见滚动/选区观察）。
+    private let selectionActionButton = NSButton()
+    private var selectionUpdateTimer: Timer?
     private let emptyView = NSStackView()
     /// 底部状态栏（Ln/Col/选中数/size）：所有 textView 类模式启用，markdown WebView /
     /// 空态 / 错误态隐藏（见 setStatusBarVisible）。
@@ -312,6 +327,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private lazy var githubMarkdownCSS = MarkdownHTMLRenderer.loadGithubMarkdownCSS()
     /// 当前是否处于 markdown WebView 呈现态（决定大纲点击走 JS 滚动还是原生滚动）。
     private var isMarkdownWebActive = false
+    /// markdown WebView 场景下选区首行的源行号 heuristic 结果（见 handleWebViewSelectionPayload）；
+    /// 非 markdown 场景恒 nil，copyPathLineReference() 据 isMarkdownWebActive 二选一。
+    private var webViewSelectionLine: Int?
     /// 当前 markdown 的标题大纲（供 WebView 载入完成后按行定位到最近标题）。
     private var currentMarkdownOutline: [MarkdownOutlineItem] = []
     /// WebView 载入完成后要滚到的源行（peeky:// / 初始定位），载入完成即消费清空。
@@ -510,6 +528,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         setupTextView()
         setupStatusBar()
         setupMarkdownWebView()
+        // 浮动选区按钮住 contentView 顶层，必须晚于 scrollView/markdownWebView 加入，
+        // 保证其 z-order 覆盖两条渲染路径（addSubview 默认叠在已有 subview 之上）。
+        setupSelectionActionButton()
         setupEmptyView()
 
         let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: 210)
@@ -623,6 +644,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         // OPEN / FILES 装进外层滚动区（树自撑高度，靠 sidebarScrollView 滚动）；
         // CONTENTS 独立成占满全高的滚动区，与 sidebarScrollView 互斥显示。
         setupTabSection()
+        sidebarStack.addArrangedSubview(closeAllRow)
         sidebarStack.addArrangedSubview(tabStack)
 
         setupFileTreeSection()
@@ -658,6 +680,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             sidebarStack.trailingAnchor.constraint(equalTo: tabListDocumentView.trailingAnchor, constant: -8),
             sidebarStack.bottomAnchor.constraint(lessThanOrEqualTo: tabListDocumentView.bottomAnchor, constant: -2),
 
+            closeAllRow.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor),
             tabStack.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor),
             fileTreeView.widthAnchor.constraint(equalTo: sidebarStack.widthAnchor)
         ])
@@ -671,6 +694,30 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         tabStack.alignment = .width
         tabStack.spacing = 4
         tabStack.translatesAutoresizingMaskIntoConstraints = false
+
+        closeAllButton.title = "Close All"
+        closeAllButton.font = NSFont.systemFont(ofSize: 11)
+        closeAllButton.isBordered = false
+        closeAllButton.contentTintColor = .secondaryLabelColor
+        closeAllButton.target = self
+        closeAllButton.action = #selector(closeAllTabsClicked(_:))
+        closeAllButton.setContentHuggingPriority(.required, for: .horizontal)
+        closeAllButton.translatesAutoresizingMaskIntoConstraints = false
+
+        let closeAllSpacer = NSView()
+        closeAllSpacer.translatesAutoresizingMaskIntoConstraints = false
+        closeAllSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        closeAllSpacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        closeAllRow.orientation = .horizontal
+        closeAllRow.alignment = .centerY
+        closeAllRow.spacing = 8
+        closeAllRow.translatesAutoresizingMaskIntoConstraints = false
+        closeAllRow.addArrangedSubview(closeAllSpacer)
+        closeAllRow.addArrangedSubview(closeAllButton)
+        // tabs < 2 时无需一键清空；后续 updateCloseAllVisibility() 据 tabs 数量与当前
+        // 生效侧栏区块（仅 Open 区块可见）刷新。
+        closeAllRow.isHidden = true
     }
 
     /// 「Files」文件树：FileTreeView 自撑高度，靠外层 sidebarScrollView 滚动。
@@ -739,16 +786,49 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         modeControl.selectedSegment = PreviewMode.formatted.rawValue
         modeControl.segmentStyle = .texturedRounded
 
-        configureIconButton(wrapButton, symbol: "text.alignleft", tooltip: "Toggle line wrap", action: #selector(toggleWrap(_:)))
-        configureIconButton(copyButton, symbol: "doc.on.doc", tooltip: "Copy", action: #selector(showCopyMenu(_:)))
-        configureIconButton(revealButton, symbol: "magnifyingglass", tooltip: "Reveal in Finder", action: #selector(revealInFinder(_:)))
-        configureIconButton(openButton, symbol: "folder", tooltip: "Open", action: #selector(openClicked(_:)))
-        configureCopyMenu()
+        // Group A：视图模式段控件独立一组（JSON 家族/空态/加载中隐藏时随 modeControl.isHidden
+        // 折叠，见 render()/renderMarkdownWeb() 的同步点）。
+        viewModeGroup.orientation = .horizontal
+        viewModeGroup.spacing = 0
+        viewModeGroup.translatesAutoresizingMaskIntoConstraints = false
+        viewModeGroup.addArrangedSubview(modeControl)
 
-        let controls = NSStackView(views: [modeControl, wrapButton, copyButton, revealButton, openButton])
+        // 4 个独立文件级复制动作：各自图标编码"复制哪种信息"，点击即时生效，不再有
+        // "点了才发现是菜单"的隐喻错位（见 plan D8）。
+        configureIconButton(copyContentButton, symbol: "doc.on.clipboard", tooltip: "Copy File Content", action: #selector(copyContentClicked(_:)))
+        configureIconButton(copyNameButton, symbol: "character.textbox", tooltip: "Copy File Name", action: #selector(copyNameClicked(_:)))
+        configureIconButton(copyAbsPathButton, symbol: "link", tooltip: "Copy Absolute Path", action: #selector(copyAbsPathClicked(_:)))
+        configureIconButton(copyRelPathButton, symbol: "arrow.turn.up.right", tooltip: "Copy Relative Path", action: #selector(copyRelPathClicked(_:)))
+        configureIconButton(revealButton, symbol: "folder", tooltip: "Reveal in Finder", action: #selector(revealInFinder(_:)))
+        configureIconButton(overflowButton, symbol: "ellipsis.circle", tooltip: "More", action: #selector(showOverflowMenu(_:)))
+        configureOverflowMenu()
+
+        // copyGroup（4 个文件级复制动作）与 locationGroup（Reveal / overflow：定位与
+        // 视图设置入口）各自组内间距 8；两小组间距 12（> 组内间距，编码两个子类）。
+        let copyGroup = NSStackView(views: [copyContentButton, copyNameButton, copyAbsPathButton, copyRelPathButton])
+        copyGroup.orientation = .horizontal
+        copyGroup.alignment = .centerY
+        copyGroup.spacing = 8
+        copyGroup.translatesAutoresizingMaskIntoConstraints = false
+
+        let locationGroup = NSStackView(views: [revealButton, overflowButton])
+        locationGroup.orientation = .horizontal
+        locationGroup.alignment = .centerY
+        locationGroup.spacing = 8
+        locationGroup.translatesAutoresizingMaskIntoConstraints = false
+
+        // Group B：当前文件的动作/视图设置入口。
+        let actionGroup = NSStackView(views: [copyGroup, locationGroup])
+        actionGroup.orientation = .horizontal
+        actionGroup.alignment = .centerY
+        actionGroup.spacing = 12
+        actionGroup.translatesAutoresizingMaskIntoConstraints = false
+
+        // Group A / Group B 组间距 20（≥1.5× 组内间距 8），编码"两组不同类"。
+        let controls = NSStackView(views: [viewModeGroup, actionGroup])
         controls.orientation = .horizontal
         controls.alignment = .centerY
-        controls.spacing = 8
+        controls.spacing = 20
         controls.translatesAutoresizingMaskIntoConstraints = false
 
         let headerStack = NSStackView(views: [titleStack, controls])
@@ -763,10 +843,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             headerStack.trailingAnchor.constraint(equalTo: headerView.trailingAnchor, constant: -14),
             headerStack.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
 
-            wrapButton.widthAnchor.constraint(equalToConstant: 30),
-            copyButton.widthAnchor.constraint(equalToConstant: 30),
+            copyContentButton.widthAnchor.constraint(equalToConstant: 30),
+            copyNameButton.widthAnchor.constraint(equalToConstant: 30),
+            copyAbsPathButton.widthAnchor.constraint(equalToConstant: 30),
+            copyRelPathButton.widthAnchor.constraint(equalToConstant: 30),
             revealButton.widthAnchor.constraint(equalToConstant: 30),
-            openButton.widthAnchor.constraint(equalToConstant: 30)
+            overflowButton.widthAnchor.constraint(equalToConstant: 30)
         ])
     }
 
@@ -848,6 +930,182 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
+    /// 选区级浮动 Copy Path:Line 按钮：住在 contentView（controller 根 view）顶层——
+    /// NSTextView 场景与 markdown WebView 场景的目标 view 不同（scrollView vs.
+    /// markdownWebView），contentView 是两者共同的上层容器，坐标统一由各自的
+    /// updateSelectionActionButton() / updateSelectionActionButtonForWebView() 转换。
+    /// 仅在非空选区、窗口 key 时显示（见 selectionDidChange / updateSelectionActionButton）。
+    private func setupSelectionActionButton() {
+        selectionActionButton.title = "path:line"
+        if let symbolImage = NSImage(systemSymbolName: "link.badge.arrow.up.right", accessibilityDescription: "Copy path:line") {
+            selectionActionButton.image = symbolImage
+        } else {
+            selectionActionButton.image = NSImage(systemSymbolName: "arrow.up.right.square", accessibilityDescription: "Copy path:line")
+        }
+        selectionActionButton.imagePosition = .imageLeading
+        selectionActionButton.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        selectionActionButton.contentTintColor = .white
+        // AttributedTitle 明确白字，避免 NSButton 在 borderless + 深色背景下沿用系统灰。
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor.white,
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium)
+        ]
+        selectionActionButton.attributedTitle = NSAttributedString(string: "path:line", attributes: attrs)
+        selectionActionButton.isBordered = false
+        selectionActionButton.wantsLayer = true
+        selectionActionButton.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        selectionActionButton.layer?.cornerRadius = 6
+        // 阴影强化脱离底层，确保在浅色/深色两外观下都醒目。
+        selectionActionButton.shadow = NSShadow()
+        selectionActionButton.layer?.shadowColor = NSColor.black.cgColor
+        selectionActionButton.layer?.shadowOpacity = 0.18
+        selectionActionButton.layer?.shadowOffset = CGSize(width: 0, height: -1)
+        selectionActionButton.layer?.shadowRadius = 4
+        selectionActionButton.layer?.masksToBounds = false
+        selectionActionButton.target = self
+        selectionActionButton.action = #selector(selectionCopyPathLineClicked(_:))
+        selectionActionButton.translatesAutoresizingMaskIntoConstraints = false
+        selectionActionButton.isHidden = true
+
+        // 加到 contentView 的顶层（positioned: .above），保证覆盖 scrollView 与
+        // markdownWebView；位置纯 frame 驱动，不加 anchor 约束。
+        contentView.addSubview(selectionActionButton, positioned: .above, relativeTo: nil)
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(selectionDidChange(_:)),
+            name: NSTextView.didChangeSelectionNotification,
+            object: textView
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidResignKey(_:)),
+            name: NSWindow.didResignKeyNotification,
+            object: window
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(selectionActionButtonBoundsDidChange(_:)),
+            name: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView
+        )
+    }
+
+    /// 选区变化 debounce 150ms 再评估显隐/定位，避免拖选过程中浮动按钮闪现。
+    @objc private func selectionDidChange(_ notification: Notification) {
+        selectionUpdateTimer?.invalidate()
+        selectionUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                self?.updateSelectionActionButton()
+            }
+        }
+    }
+
+    /// 窗口失活立即隐藏浮动按钮（不等 debounce）。
+    @objc func windowDidResignKey(_ notification: Notification) {
+        selectionActionButton.isHidden = true
+    }
+
+    /// 滚动时按钮跟随选区在屏上重新定位；仅在已显示时才需要重算，避免空跑。
+    @objc private func selectionActionButtonBoundsDidChange(_ notification: Notification) {
+        guard !selectionActionButton.isHidden else { return }
+        updateSelectionActionButton()
+    }
+
+    /// 计算选区首行边缘的浮动按钮位置（NSTextView 场景）；越界（贴工具栏/右缘）时反向就近校正。
+    private func updateSelectionActionButton() {
+        guard window?.isKeyWindow == true, activeTab != nil else {
+            selectionActionButton.isHidden = true
+            return
+        }
+
+        let range = textView.selectedRange()
+        guard range.length > 0 else {
+            selectionActionButton.isHidden = true
+            return
+        }
+
+        guard
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer
+        else {
+            selectionActionButton.isHidden = true
+            return
+        }
+
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        guard glyphRange.length > 0 else {
+            selectionActionButton.isHidden = true
+            return
+        }
+
+        let lineFragmentRect = layoutManager.lineFragmentRect(forGlyphAt: glyphRange.location, effectiveRange: nil)
+        let selectionRect = layoutManager.boundingRect(
+            forGlyphRange: NSRange(location: glyphRange.location, length: min(glyphRange.length, 200)),
+            in: textContainer
+        )
+
+        // textView 坐标 → contentView 坐标；转换含高度的完整矩形（而非仅转换一个点后手动
+        // 加高度），让 convert(_:to:) 正确处理 textView（flipped）与 contentView（非 flipped）
+        // 两者相反的 flip 方向——单点转换后再手动加减高度在跨 flip 时方向会算错。
+        let inTextView = NSRect(
+            x: selectionRect.maxX,
+            y: lineFragmentRect.minY,
+            width: 0,
+            height: lineFragmentRect.height
+        ).offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+        let rectInContent = textView.convert(inTextView, to: contentView)
+
+        positionSelectionActionButton(anchorRect: rectInContent)
+    }
+
+    /// markdown WebView 场景的浮动按钮定位：payload 坐标是 CSS 像素（相对 WKWebView
+    /// viewport）；WKWebView 本身是 flipped view，与 CSS 的 top-left/y-down 语义一致，
+    /// 可直接构造矩形转换，无需额外翻转。
+    private func updateSelectionActionButtonForWebView(x: Double, y: Double, width: Double, height: Double) {
+        guard window?.isKeyWindow == true, isMarkdownWebActive else {
+            selectionActionButton.isHidden = true
+            return
+        }
+
+        let webRect = NSRect(x: x, y: y, width: width, height: height)
+        let rectInContent = markdownWebView.convert(webRect, to: contentView)
+        positionSelectionActionButton(anchorRect: rectInContent)
+    }
+
+    /// NSTextView / markdown WebView 两条路径共用的浮动按钮几何：anchorRect 已转换到
+    /// contentView（非 flipped，y 向上）坐标系——anchorRect.maxY 对应锚点视觉上边缘、
+    /// .minY 对应视觉下边缘（与两条路径各自转换前的 flipped 源视图里 min/max 含义相反，
+    /// 由 convert(_:to:) 处理）。默认贴锚点上边缘上方 4pt；若越过 header 下边界（工具栏），
+    /// 反向落到锚点下边缘下方 4pt；最终两轴都收敛在 contentView.bounds 内。
+    private func positionSelectionActionButton(anchorRect: NSRect) {
+        selectionActionButton.sizeToFit()
+        var frame = selectionActionButton.frame
+        // sizeToFit 只算 title + image 自身宽度，borderless 无内边距——手动加 16pt
+        // 左右填充让 chip 视觉不挤，同时兜底最小宽度 108（放得下 icon + "path:line"）。
+        frame.size.width = max(frame.size.width + 16, 108)
+        frame.size.height = 28
+        frame.origin.x = anchorRect.maxX - frame.width
+        frame.origin.y = anchorRect.maxY + 4
+
+        let clipBounds = contentView.bounds
+        let headerBoundary = headerView.frame.minY - 4
+        if frame.origin.y + frame.height > headerBoundary {
+            frame.origin.y = anchorRect.minY - frame.height - 4
+        }
+
+        frame.origin.x = max(clipBounds.minX + 4, min(frame.origin.x, clipBounds.maxX - frame.width - 4))
+        frame.origin.y = max(clipBounds.minY + 4, min(frame.origin.y, clipBounds.maxY - frame.height - 4))
+
+        selectionActionButton.frame = frame
+        selectionActionButton.isHidden = false
+    }
+
+    @objc private func selectionCopyPathLineClicked(_ sender: Any?) {
+        copyPathLineReference()
+        selectionActionButton.isHidden = true
+    }
+
     /// 底部状态栏：左侧 Ln/Col/选中数，右侧文件 size；纯背景色块（非 vibrancy），色走
     /// PeekyTheme，见 applyStatusBarColors。默认隐藏，显示态由各渲染路径显式切换
     /// （见 setStatusBarVisible）。
@@ -890,15 +1148,135 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         if let textViewSelectionObserver {
             NotificationCenter.default.removeObserver(textViewSelectionObserver)
         }
+        // selectionDidChange / windowDidResignKey / selectionActionButtonBoundsDidChange
+        // 均以 self 为 selector-based observer 注册，一并摘除。
+        // selectionUpdateTimer 的 block 用 [weak self]，self 释放后 fire 自然 no-op，
+        // 无需在 deinit 触碰（Swift 6 nonisolated deinit 也不允许访问非 Sendable 的 Timer）。
+        NotificationCenter.default.removeObserver(self)
     }
 
     /// markdown 专用 WebView：与编辑器 scrollView 同区叠放，仅 markdown 显示。
     /// 不覆盖 appearance，让 github-markdown-css 的 prefers-color-scheme 随系统自动切浅深。
+    /// 选区变化经 peekySelection 消息桥接回 Swift（见 userContentController(_:didReceive:)），
+    /// 承接浮动 Copy Path:Line 按钮在 markdown 场景的显隐/定位。
     private func setupMarkdownWebView() {
         markdownWebView.translatesAutoresizingMaskIntoConstraints = false
         markdownWebView.isHidden = true
         markdownWebView.navigationDelegate = self
         contentView.addSubview(markdownWebView)
+
+        let script = WKUserScript(
+            source: Self.webViewSelectionScript,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true
+        )
+        markdownWebView.configuration.userContentController.add(self, name: "peekySelection")
+        markdownWebView.configuration.userContentController.addUserScript(script)
+    }
+
+    /// 注入 markdown WebView 的选区变化监听：非空选区时回传首行 clientRect（CSS 像素）
+    /// 与选中文本；无选区/折叠选区时回传 hasSelection: false。经 peekySelection handler
+    /// 桥接到 handleWebViewSelectionPayload(_:)。
+    private static let webViewSelectionScript = #"""
+    (function() {
+        document.addEventListener('selectionchange', function() {
+            const sel = window.getSelection();
+            if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+                window.webkit.messageHandlers.peekySelection.postMessage({ hasSelection: false });
+                return;
+            }
+            const range = sel.getRangeAt(0);
+            const rects = range.getClientRects();
+            const first = rects.length > 0 ? rects[0] : range.getBoundingClientRect();
+            window.webkit.messageHandlers.peekySelection.postMessage({
+                hasSelection: true,
+                text: sel.toString(),
+                x: first.left,
+                y: first.top,
+                width: first.width,
+                height: first.height
+            });
+        });
+    })();
+    """#
+
+    /// WKScriptMessageHandler：WebKit 保证此回调运行在主线程（同 jsonHighlightScrollObserver /
+    /// textViewSelectionObserver 处的 assumeIsolated 论证一致）；message.name/.body 本身是
+    /// MainActor-isolated 属性（SDK 标注），连读取也需在 assumeIsolated 块内，直接断言隔离
+    /// 同步处理，避免把非 Sendable 的 Any 跨 Task 边界捕获触发 Swift 6 严格并发检查。
+    nonisolated func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        MainActor.assumeIsolated {
+            guard message.name == "peekySelection" else { return }
+            handleWebViewSelectionPayload(message.body)
+        }
+    }
+
+    /// markdown 场景源行号 heuristic：selected 来自 WebView 渲染后的纯文本（无 `**` /
+    /// backtick 等 markdown 语法字符），source 是原 markdown 文本（含语法字符）。直接
+    /// range(of: selected) 常失败——`**S3 principle**` 渲染成 `S3 principle`，跨过 `**`
+    /// 的窗口在源里就找不到。故采取多起点、多长度短窗口采样：任一窗口能在源里 range(of:)
+    /// 命中即用其行号——窗口只要避开源里 markdown 语法字符插入位置就命中，多起点保证
+    /// 至少一个能落在"纯文本连续段"上。全部失败降级为 1。纯函数、无 UI 依赖、可测。
+    nonisolated static func heuristicSourceLine(selected: String, in source: String) -> Int {
+        guard !selected.isEmpty, !source.isEmpty else { return 1 }
+
+        func lineNumber(atOffset offset: String.Index) -> Int {
+            source[..<offset].reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        }
+
+        if let range = source.range(of: selected) {
+            return lineNumber(atOffset: range.lowerBound)
+        }
+
+        let windowLengths = [40, 24, 16, 10, 6]
+        let startOffsets = [0, 4, 8, 16, 24, 40, 64, 96]
+        for length in windowLengths {
+            for offset in startOffsets {
+                guard selected.count >= offset + length else { continue }
+                let startIdx = selected.index(selected.startIndex, offsetBy: offset)
+                let endIdx = selected.index(startIdx, offsetBy: length)
+                let needle = String(selected[startIdx..<endIdx])
+                if let range = source.range(of: needle) {
+                    return lineNumber(atOffset: range.lowerBound)
+                }
+            }
+        }
+        return 1
+    }
+
+    /// markdown WebView 选区 payload 处理：无选区立即隐藏；有选区则用 heuristic 算源行号，
+    /// debounce 150ms 后定位浮动按钮（复用既有 selectionUpdateTimer，避免与 NSTextView
+    /// 路径的 debounce 互相打断）。
+    private func handleWebViewSelectionPayload(_ body: Any) {
+        guard let payload = body as? [String: Any], let hasSelection = payload["hasSelection"] as? Bool else {
+            return
+        }
+
+        guard hasSelection else {
+            selectionActionButton.isHidden = true
+            webViewSelectionLine = nil
+            return
+        }
+
+        guard
+            let text = payload["text"] as? String,
+            let x = payload["x"] as? Double,
+            let y = payload["y"] as? Double,
+            let width = payload["width"] as? Double,
+            let height = payload["height"] as? Double
+        else {
+            return
+        }
+
+        let sourceText = activeTab?.document?.text ?? ""
+        webViewSelectionLine = Self.heuristicSourceLine(selected: text, in: sourceText)
+
+        selectionUpdateTimer?.invalidate()
+        selectionUpdateTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                self?.updateSelectionActionButtonForWebView(x: x, y: y, width: width, height: height)
+            }
+        }
     }
 
     private func setupEmptyView() {
@@ -1052,6 +1430,14 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         fileTreeView.isHidden = effective != .files
         sidebarScrollView.isHidden = effective == .contents
         outlineScrollView.isHidden = effective != .contents
+        updateCloseAllVisibility()
+    }
+
+    /// Close All 只在 Open 区块生效且 tabs ≥2 时可见；tabStack.isHidden 已反映当前是否
+    /// 处于 Open 区块，两条件合一即为最终显隐（tabs 数变化 / 侧栏区块切换均经此刷新，
+    /// 因二者最终都会调用 updateSidebarSections()）。
+    private func updateCloseAllVisibility() {
+        closeAllRow.isHidden = tabs.count < 2 || tabStack.isHidden
     }
 
     @objc private func sidebarSectionChanged(_ sender: NSSegmentedControl) {
@@ -1101,7 +1487,22 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         renderActiveTab()
     }
 
+    /// 一键清空全部 tab：与单 tab 关闭同一收尾（rebuildTabList → 文件树跟随 → 重渲染），
+    /// 清空后 activeTab 恒 nil，renderActiveTab() 自然落到 showEmptyState() 分支。
+    @objc private func closeAllTabsClicked(_ sender: Any?) {
+        selectionActionButton.isHidden = true
+        tabs.removeAll()
+        activeTabID = nil
+
+        rebuildTabList()
+        if let url = activeTab?.url {
+            establishTreeRoot(for: url)
+        }
+        renderActiveTab()
+    }
+
     private func renderActiveTab() {
+        selectionActionButton.isHidden = true
         invalidateHighlighting()
         clearFoldContext()
 
@@ -1143,6 +1544,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         // JSON/JSONL 是唯一渲染形态（pretty-print 分色），不提供 Format/Raw 切换。
         let isJSONFamily = document.kind == .json || document.kind == .jsonl
         modeControl.isHidden = isJSONFamily
+        viewModeGroup.isHidden = isJSONFamily
         modeControl.selectedSegment = mode.rawValue
         modeControl.isEnabled = document.kind.hasFormattedPreview
         modeControl.setLabel("Format", forSegment: 0)
@@ -1194,8 +1596,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
 
         metaLabel.stringValue = summary
-        revealButton.isEnabled = true
-        copyButton.isEnabled = true
+        setActionButtonsEnabled(true)
+        copyRelPathButton.isEnabled = hasRepoRootForActiveFile
         showPreviewState()
         applyLineWrapping()
         applyMarkdownReadingColumn(isActive: isMarkdownReadingColumnActive)
@@ -1213,8 +1615,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         titleLabel.stringValue = url.lastPathComponent
         metaLabel.stringValue = "Open failed"
         modeControl.isEnabled = false
-        revealButton.isEnabled = true
-        copyButton.isEnabled = true
+        setActionButtonsEnabled(true)
+        copyRelPathButton.isEnabled = hasRepoRootForActiveFile
 
         textView.textStorage?.setAttributedString(SyntaxHighlighter.monospace(message))
         applyDisplayMetadata(.plain)
@@ -1232,6 +1634,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func showPlainText() {
         markdownWebView.isHidden = true
         isMarkdownWebActive = false
+        selectionActionButton.isHidden = true
+        webViewSelectionLine = nil
         scrollView.isHidden = false
     }
 
@@ -1244,8 +1648,11 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// markdown（≤8MB）→ WKWebView + 真 github-markdown-css 呈现。构建 HTML、载入、
     /// 重建大纲、填元信息；选中+复制由 WebView 原生自带。
     private func renderMarkdownWeb(document: LoadedText, targetLine: Int?) {
+        selectionActionButton.isHidden = true
+        webViewSelectionLine = nil
         isMarkdownWebActive = true
         modeControl.isHidden = true
+        viewModeGroup.isHidden = true
 
         let rendered = MarkdownHTMLRenderer.renderWithOutline(document.text)
         currentMarkdownOutline = rendered.outline
@@ -1267,8 +1674,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             summary += "  |  Line \(targetLine)"
         }
         metaLabel.stringValue = summary
-        revealButton.isEnabled = true
-        copyButton.isEnabled = true
+        setActionButtonsEnabled(true)
+        copyRelPathButton.isEnabled = hasRepoRootForActiveFile
 
         showPreviewState()
         showMarkdownWeb()
@@ -2090,8 +2497,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         markdownWebView.isHidden = true
         isMarkdownWebActive = false
         modeControl.isEnabled = false
-        revealButton.isEnabled = false
-        copyButton.isEnabled = false
+        setActionButtonsEnabled(false)
+        selectionActionButton.isHidden = true
+        webViewSelectionLine = nil
         metaLabel.stringValue = ""
         textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
         applyDisplayMetadata(.plain)
@@ -2186,6 +2594,14 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         button.action = action
     }
 
+    /// 6 个动作 button（4 copy + reveal + overflow）随文件加载状态统一启用/禁用；
+    /// overflow 一并禁用，避免空态浮出 wrap 菜单。
+    private func setActionButtonsEnabled(_ enabled: Bool) {
+        [copyContentButton, copyNameButton, copyAbsPathButton, copyRelPathButton, revealButton, overflowButton].forEach {
+            $0.isEnabled = enabled
+        }
+    }
+
     @objc private func openClicked(_ sender: Any?) {
         onOpenRequested?()
     }
@@ -2208,75 +2624,23 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
-    // MARK: - Copy menu (工具栏下拉 + Edit 主菜单共用的六项操作)
+    // MARK: - Overflow menu (顶栏 ⋯：当前只 Wrap Lines，未来视图设置扩展点)
 
-    private func configureCopyMenu() {
-        copyMenu.delegate = self
+    private func configureOverflowMenu() {
+        overflowMenu.delegate = self
 
-        let copyAllItem = NSMenuItem(title: "Copy All", action: #selector(copyAllMenuAction(_:)), keyEquivalent: "c")
-        copyAllItem.keyEquivalentModifierMask = [.command, .option]
-        copyAllItem.target = self
-        copyMenu.addItem(copyAllItem)
-
-        // 无 keyEquivalent：纯 ⌘C 留给 NSTextView 原生 copy:（复制选区），
-        // 此菜单项只作为可发现入口，行为与原生 ⌘C 一致（含空选区回落全文）。
-        let copySelectionItem = NSMenuItem(
-            title: "Copy Selection",
-            action: #selector(copySelectionMenuAction(_:)),
-            keyEquivalent: ""
-        )
-        copySelectionItem.target = self
-        copyMenu.addItem(copySelectionItem)
-
-        let copyAbsoluteItem = NSMenuItem(
-            title: "Copy Absolute Path",
-            action: #selector(copyAbsolutePathMenuAction(_:)),
-            keyEquivalent: "c"
-        )
-        copyAbsoluteItem.keyEquivalentModifierMask = [.command, .shift]
-        copyAbsoluteItem.target = self
-        copyMenu.addItem(copyAbsoluteItem)
-
-        let copyRelativeItem = NSMenuItem(
-            title: "Copy Relative Path",
-            action: #selector(copyRelativePathMenuAction(_:)),
-            keyEquivalent: "c"
-        )
-        copyRelativeItem.keyEquivalentModifierMask = [.command, .shift, .option]
-        copyRelativeItem.target = self
-        copyMenu.addItem(copyRelativeItem)
-        copyRelativePathMenuItem = copyRelativeItem
-
-        copyMenu.addItem(.separator())
-
-        let copyFileItem = NSMenuItem(title: "Copy File", action: #selector(copyFileMenuAction(_:)), keyEquivalent: "")
-        copyFileItem.target = self
-        copyMenu.addItem(copyFileItem)
-
-        let copyPathLineItem = NSMenuItem(
-            title: "Copy Path:Line",
-            action: #selector(copyPathLineMenuAction(_:)),
-            keyEquivalent: ""
-        )
-        copyPathLineItem.target = self
-        copyMenu.addItem(copyPathLineItem)
-
-        copyMenu.addItem(.separator())
-
-        let openInEditorItem = NSMenuItem(
-            title: "Open in Editor",
-            action: #selector(openInEditorMenuAction(_:)),
-            keyEquivalent: "e"
-        )
-        openInEditorItem.keyEquivalentModifierMask = [.command]
-        openInEditorItem.target = self
-        copyMenu.addItem(openInEditorItem)
+        let wrapItem = NSMenuItem(title: "Wrap Lines", action: #selector(toggleWrap(_:)), keyEquivalent: "")
+        wrapItem.target = self
+        wrapItem.state = wrapsLines ? .on : .off
+        overflowMenu.addItem(wrapItem)
+        wrapLinesMenuItem = wrapItem
     }
 
-    /// 弹出前隐藏「复制相对路径」——无 repo root 时该项不出现。
+    /// overflowMenu 弹出前刷新「Wrap Lines」勾选态（反映当前 wrapsLines）。
     func menuNeedsUpdate(_ menu: NSMenu) {
-        guard menu === copyMenu else { return }
-        copyRelativePathMenuItem?.isHidden = !hasRepoRootForActiveFile
+        if menu === overflowMenu {
+            wrapLinesMenuItem?.state = wrapsLines ? .on : .off
+        }
     }
 
     private var hasRepoRootForActiveFile: Bool {
@@ -2284,36 +2648,24 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         return RepoRoot.discover(from: url) != nil
     }
 
-    @objc private func showCopyMenu(_ sender: Any?) {
-        copyMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: copyButton.bounds.height + 4), in: copyButton)
+    @objc private func showOverflowMenu(_ sender: Any?) {
+        overflowMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: overflowButton.bounds.height + 4), in: overflowButton)
     }
 
-    @objc private func copyAllMenuAction(_ sender: Any?) {
+    @objc private func copyContentClicked(_ sender: Any?) {
         copyAllText()
     }
 
-    @objc private func copySelectionMenuAction(_ sender: Any?) {
-        copySelection()
+    @objc private func copyNameClicked(_ sender: Any?) {
+        copyFileName()
     }
 
-    @objc private func copyAbsolutePathMenuAction(_ sender: Any?) {
+    @objc private func copyAbsPathClicked(_ sender: Any?) {
         copyAbsolutePath()
     }
 
-    @objc private func copyRelativePathMenuAction(_ sender: Any?) {
+    @objc private func copyRelPathClicked(_ sender: Any?) {
         copyRelativePath()
-    }
-
-    @objc private func copyFileMenuAction(_ sender: Any?) {
-        copyFileReference()
-    }
-
-    @objc private func copyPathLineMenuAction(_ sender: Any?) {
-        copyPathLineReference()
-    }
-
-    @objc private func openInEditorMenuAction(_ sender: Any?) {
-        openInEditor()
     }
 
     /// ① 复制全文：TextFileLoader 的原始文本，不是渲染后 attributed 文本。
@@ -2323,20 +2675,11 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         NSPasteboard.general.setString(document.text, forType: .string)
     }
 
-    /// 复制选中：选区非空复制选区文本，选区为空回落复制全文（copyAllText 同源语义）。
-    func copySelection() {
-        guard let document = activeTab?.document else { return }
-        let selectedRange = textView.selectedRange()
-        let selectedText = selectedRange.length > 0 ? (textView.string as NSString).substring(with: selectedRange) : ""
-        let payload = Self.selectionCopyPayload(selected: selectedText, full: document.text)
+    /// 复制文件名（不含路径）。
+    func copyFileName() {
+        guard let url = activeTab?.url else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(payload, forType: .string)
-    }
-
-    /// 选区非空取选区，选区为空回落全文；纯函数、无 MainActor 状态，标 nonisolated
-    /// 便于任意上下文（含测试）同步调用，不依赖 NSTextView/NSPasteboard。
-    nonisolated static func selectionCopyPayload(selected: String, full: String) -> String {
-        selected.isEmpty ? full : selected
+        NSPasteboard.general.setString(url.lastPathComponent, forType: .string)
     }
 
     /// ② 复制绝对路径。
@@ -2346,31 +2689,21 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         NSPasteboard.general.setString(url.path, forType: .string)
     }
 
-    /// ③ 复制相对 repo root 路径；无 repo 时静默不作为（菜单项本身已隐藏/禁用）。
+    /// ③ 复制相对 repo root 路径；无 repo 时静默不作为（button 本身已禁用）。
     func copyRelativePath() {
         guard let url = activeTab?.url, let root = RepoRoot.discover(from: url) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(relativePath(of: url, root: root), forType: .string)
     }
 
-    /// ④ 复制文件本体：Finder ⌘V 可粘贴出文件。
-    func copyFileReference() {
-        guard let url = activeTab?.url else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects([url as NSURL])
-    }
-
-    /// ⑤ 复制 path:line：行号取当前选中文本首行，无选中时取可视区首个逻辑行。
+    /// 复制 path:line：markdown WebView 场景取 webViewSelectionLine（heuristic 匹配失败
+    /// 降级为 1）；NSTextView 场景行号取当前选中文本首行，无选中时取可视区首个逻辑行。
+    /// 由选区浮动按钮（T2/T3）调用。
     func copyPathLineReference() {
         guard let url = activeTab?.url else { return }
+        let line = isMarkdownWebActive ? (webViewSelectionLine ?? 1) : currentReferenceLine()
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString("\(url.path):\(currentReferenceLine())", forType: .string)
-    }
-
-    /// ⑥ ⌘E 用编辑器打开：默认 app 是 VS Code/Cursor 时经其 URL scheme 带 path:line 定位。
-    func openInEditor() {
-        guard let url = activeTab?.url else { return }
-        openFileInEditor(url: url, line: currentReferenceLine())
+        NSPasteboard.general.setString("\(url.path):\(line)", forType: .string)
     }
 
     private func relativePath(of url: URL, root: URL) -> String {
@@ -2471,33 +2804,5 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
 
         return line
-    }
-
-    private func openFileInEditor(url: URL, line: Int) {
-        guard let editorURL = NSWorkspace.shared.urlForApplication(toOpen: url) else {
-            NSWorkspace.shared.open(url)
-            return
-        }
-
-        let bundleID = Bundle(url: editorURL)?.bundleIdentifier
-        let scheme: String?
-        switch bundleID {
-        case "com.microsoft.VSCode":
-            scheme = "vscode"
-        case "com.todesktop.230313mzl4w4u92":
-            scheme = "cursor"
-        default:
-            scheme = nil
-        }
-
-        if
-            let scheme,
-            let encodedPath = url.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-            let deepLinkURL = URL(string: "\(scheme)://file/\(encodedPath):\(line)")
-        {
-            NSWorkspace.shared.open(deepLinkURL)
-        } else {
-            NSWorkspace.shared.open(url)
-        }
     }
 }

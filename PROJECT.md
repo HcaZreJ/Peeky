@@ -16,7 +16,7 @@
 | JSON/JSONL 查看器 codebeautify 样板对齐：gutter 折叠三角（点击折叠/展开，行号跳号）+ 折叠 chip `⟷` 占位 + 缩进虚线导轨 + 底部状态栏（Ln/Col/选中字符数/size，源坐标语义）+ 双击选中整 element + 折叠态复制展开为完整底层 JSON；折叠合成/坐标映射为纯函数（`JSONFoldMap`/`JSONFoldComposer`），配色 7 个新语义 token 入 `PeekyTheme` | ✅ |
 | 源码语法高亮：JSC+Shiki，VSCode Dark Modern 原色，16 扩展名（py/ts/js/mjs/cjs/json/yaml/yml/toml/sh/bash/zsh/swift/ini/conf/config），流式分块上色 + 启动预热 + 超预算纯文本回退 | ✅ |
 | 行号 gutter（NSRulerView，viewport-only，折行仅首视觉行编号）+ 全文可选中 ⌘C | ✅ |
-| 复制五件套（全文 ⌥⌘C / 绝对路径 ⇧⌘C / 相对 repo root 路径 ⌥⇧⌘C / 文件本体 / path:line）+ ⌘E 用编辑器打开（VS Code/Cursor 带行定位） | ✅ |
+| 顶栏 4 独立 Copy 按钮（全文 ⌥⌘C / 文件名 / 绝对路径 ⇧⌘C / 相对 repo root 路径 ⌥⇧⌘C；无 repo 时相对路径灰置）+ Reveal in Finder + ⋯ overflow（Wrap Lines checkable）；选区触发浮动 Copy path:line 按钮（NSTextView 与 markdown WebView 双路径，markdown 场景走源行号 heuristic） | ✅ |
 | XML/plist 格式化 + 正则高亮 | ✅ |
 | 拖放打开 / Finder Open With / 80MB·8MB·1.5M 三级性能预算 | ✅ |
 | 端到端冷启计时验收（plan W5） | ⏳ 后续批次 |

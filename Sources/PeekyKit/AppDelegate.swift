@@ -87,10 +87,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(.separator())
 
-        let copyAllItem = NSMenuItem(title: "Copy All", action: #selector(copyAllTextAction(_:)), keyEquivalent: "c")
+        let copyAllItem = NSMenuItem(title: "Copy File Content", action: #selector(copyAllTextAction(_:)), keyEquivalent: "c")
         copyAllItem.keyEquivalentModifierMask = [.command, .option]
         copyAllItem.target = self
         editMenu.addItem(copyAllItem)
+
+        let copyFileNameItem = NSMenuItem(
+            title: "Copy File Name",
+            action: #selector(copyFileNameAction(_:)),
+            keyEquivalent: ""
+        )
+        copyFileNameItem.target = self
+        editMenu.addItem(copyFileNameItem)
 
         let copyAbsolutePathItem = NSMenuItem(
             title: "Copy Absolute Path",
@@ -111,38 +119,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         editMenu.addItem(copyRelativePathItem)
         copyRelativePathMenuItem = copyRelativePathItem
 
-        editMenu.addItem(.separator())
-
-        let copyFileItem = NSMenuItem(title: "Copy File", action: #selector(copyFileAction(_:)), keyEquivalent: "")
-        copyFileItem.target = self
-        editMenu.addItem(copyFileItem)
-
-        let copyPathLineItem = NSMenuItem(
-            title: "Copy Path:Line",
-            action: #selector(copyPathLineAction(_:)),
-            keyEquivalent: ""
-        )
-        copyPathLineItem.target = self
-        editMenu.addItem(copyPathLineItem)
-
-        editMenu.addItem(.separator())
-
-        let openInEditorItem = NSMenuItem(
-            title: "Open in Editor",
-            action: #selector(openInEditorAction(_:)),
-            keyEquivalent: "e"
-        )
-        openInEditorItem.keyEquivalentModifierMask = [.command]
-        openInEditorItem.target = self
-        editMenu.addItem(openInEditorItem)
-
         editMenu.delegate = self
         self.editMenu = editMenu
 
         NSApp.mainMenu = mainMenu
     }
 
-    // MARK: - Edit 菜单复制五件套 + ⌘E（转发到当前 key/main 窗口的 PreviewWindowController）
+    // MARK: - Edit 菜单复制四件套（转发到当前 key/main 窗口的 PreviewWindowController）
 
     private func activeWindowController() -> PreviewWindowController? {
         if let keyWindowController = windows.first(where: { $0.window?.isKeyWindow == true }) {
@@ -165,15 +148,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         copyRelativePathMenuItem?.isHidden = !showRelativePath
     }
 
-    /// 复制五件套 + ⌘E 六项：无打开文件时全部禁用；相对路径项额外要求命中 repo root。
+    /// 复制四件套：无打开文件时全部禁用；相对路径项额外要求命中 repo root。
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         let copyActions: Set<Selector> = [
             #selector(copyAllTextAction(_:)),
+            #selector(copyFileNameAction(_:)),
             #selector(copyAbsolutePathAction(_:)),
-            #selector(copyRelativePathAction(_:)),
-            #selector(copyFileAction(_:)),
-            #selector(copyPathLineAction(_:)),
-            #selector(openInEditorAction(_:))
+            #selector(copyRelativePathAction(_:))
         ]
 
         guard let action = menuItem.action, copyActions.contains(action) else {
@@ -196,24 +177,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         activeWindowController()?.copyAllText()
     }
 
+    @objc private func copyFileNameAction(_ sender: Any?) {
+        activeWindowController()?.copyFileName()
+    }
+
     @objc private func copyAbsolutePathAction(_ sender: Any?) {
         activeWindowController()?.copyAbsolutePath()
     }
 
     @objc private func copyRelativePathAction(_ sender: Any?) {
         activeWindowController()?.copyRelativePath()
-    }
-
-    @objc private func copyFileAction(_ sender: Any?) {
-        activeWindowController()?.copyFileReference()
-    }
-
-    @objc private func copyPathLineAction(_ sender: Any?) {
-        activeWindowController()?.copyPathLineReference()
-    }
-
-    @objc private func openInEditorAction(_ sender: Any?) {
-        activeWindowController()?.openInEditor()
     }
 
     private func showOpenPanel() {
