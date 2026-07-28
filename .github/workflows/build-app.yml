@@ -1,16 +1,19 @@
 name: Build App
 
 on:
+  push:
+    tags:
+      - "v*"
   workflow_dispatch:
     inputs:
       source_ref:
         description: "Branch, tag, or commit SHA to build"
         required: true
-        default: "release"
+        default: "main"
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -19,18 +22,38 @@ jobs:
 
     env:
       APP_NAME: Peeky
-      BUILD_REF: ${{ inputs.source_ref }}
+      # tag 触发时 github.ref_name = v0.2.0;workflow_dispatch 用输入。
+      BUILD_REF: ${{ inputs.source_ref || github.ref_name }}
 
     steps:
       - name: Checkout source ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_ref }}
+          ref: ${{ env.BUILD_REF }}
 
       - name: Show Swift version
         run: swift --version
 
+      - name: Derive version from ref
+        id: version
+        run: |
+          set -euo pipefail
+          ref="$BUILD_REF"
+          # tag 形如 v0.2.0 → 版本 0.2.0(去 v 前缀);其它 ref 保留字面量,Info.plist 里能识别为非发布构建。
+          if [[ "$ref" =~ ^v([0-9]+\.[0-9]+\.[0-9]+.*)$ ]]; then
+            version="${BASH_REMATCH[1]}"
+            is_release="true"
+          else
+            version="$ref"
+            is_release="false"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "is_release=$is_release" >> "$GITHUB_OUTPUT"
+          echo "Version: $version (release=$is_release)"
+
       - name: Build app
+        env:
+          PEEKY_VERSION: ${{ steps.version.outputs.version }}
         run: scripts/build-app.sh
 
       - name: Package app
@@ -49,8 +72,12 @@ jobs:
           mkdir -p artifacts
           ditto -c -k --keepParent ".build/${APP_NAME}.app" "$zip_path"
 
+          sha256="$(shasum -a 256 "$zip_path" | awk '{print $1}')"
+
           echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
           echo "zip_path=$zip_path" >> "$GITHUB_OUTPUT"
+          echo "zip_basename=${artifact_name}.zip" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
 
       - name: Upload app artifact
         uses: actions/upload-artifact@v4
@@ -58,3 +85,61 @@ jobs:
           name: ${{ steps.package.outputs.artifact_name }}
           path: ${{ steps.package.outputs.zip_path }}
           if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ env.BUILD_REF }}
+          ZIP: ${{ steps.package.outputs.zip_path }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" "$ZIP" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --generate-notes
+
+      - name: Update Homebrew Cask
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          # fine-grained PAT with contents:write on HcaZreJ/homebrew-peeky
+          TAP_PUSH_TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TAP_PUSH_TOKEN:-}" ]; then
+            echo "TAP_PUSH_TOKEN secret missing — skipping tap update."
+            exit 0
+          fi
+
+          tap_dir="$(mktemp -d)"
+          git clone "https://x-access-token:${TAP_PUSH_TOKEN}@github.com/HcaZreJ/homebrew-peeky.git" "$tap_dir"
+          cd "$tap_dir"
+
+          git config user.name "peeky-release-bot"
+          git config user.email "peeky-release-bot@users.noreply.github.com"
+
+          cask_file="Casks/peeky.rb"
+          python3 - "$cask_file" <<'PY'
+          import re, sys, os
+          path = sys.argv[1]
+          version = os.environ["VERSION"]
+          sha256 = os.environ["SHA256"]
+          with open(path, "r", encoding="utf-8") as f:
+              src = f.read()
+          src = re.sub(r'version\s+"[^"]*"', f'version "{version}"', src, count=1)
+          src = re.sub(r'sha256\s+"[^"]*"', f'sha256 "{sha256}"', src, count=1)
+          with open(path, "w", encoding="utf-8") as f:
+              f.write(src)
+          PY
+
+          git add "$cask_file"
+          if git diff --cached --quiet; then
+            echo "Cask already up to date."
+            exit 0
+          fi
+
+          git commit -m "peeky ${VERSION}"
+          git push origin HEAD:main
