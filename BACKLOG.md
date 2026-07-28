@@ -1,3 +1,3 @@
 # BACKLOG
 
-（当前无 in-progress work-unit。已完成收档：toolbar-tabs-hierarchy——顶栏 4 独立 Copy 按钮 + Reveal folder + ⋯ overflow、侧栏 file tab close 硬对齐 + Close All、选区触发浮动 Copy path:line 双路径（NSTextView + WKWebView）、markdown 源行号 heuristic、死代码清理（Copy Selection / Copy File / Open in Editor）；plan Status: Completed → `.claude/plans/toolbar-tabs-hierarchy.md`。前序批次：markdown 渲染重构 `markdown-render-redesign.md`；JSON/JSONL 渲染简化 `2026-07-20-json-jsonl-render-simplify.md`；json-viewer-parity `json-viewer-parity.md`；早期基座 `2026-07-03-peek-native.md`。后续跟踪走 GitHub issues：代码高亮 #16、GLFM #14；JSON/JSONL follow-up 记于 JSON/JSONL plan Follow-ups。）
+当前无 in-progress work-unit。
