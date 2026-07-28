@@ -2,6 +2,8 @@
 
 Peeky 是 macOS 上的只读文件预览器，解决用 IDE 打开 AI 产出的文件冷启动太慢的问题。可以从终端 `peek filename` 光速打开文件。
 
+![Peeky demo](assets/demo.gif)
+
 ## 功能
 
 - 从终端 `peek path`、`peek path:line`、`peek path:line:col` 打开文件并跳到指定行、指定列。
@@ -106,6 +108,12 @@ Peeky.app 在 Info.plist 中注册为下列文件类型的查看器（`LSHandler
 | 其它文本 | 任意 | 等宽原文；文件内容以 `{`、`[` 起始时按 JSON 处理，以 `<` 起始时按 XML 处理 |
 
 超过 80 MB 的文件只读取前 80 MB，并标注为 truncated。
+
+三种典型渲染：
+
+| Markdown | JSON | 源码 |
+|---|---|---|
+| ![Markdown 渲染](assets/demo-markdown.png) | ![JSON 词法高亮](assets/demo-json.png) | ![Python 语法高亮](assets/demo-code.png) |
 
 ## 语法高亮
 
