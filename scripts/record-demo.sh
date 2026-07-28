@@ -71,6 +71,7 @@ capture_stills() {
     "showcase.md::demo-markdown.png"
     "sample.json::demo-json.png"
     "formatter.py::demo-code.png"
+    "events.jsonl::demo-jsonl.png"
   )
   for pair in "${pairs[@]}"; do
     IFS=":" read -r file suffix out <<< "$pair"
