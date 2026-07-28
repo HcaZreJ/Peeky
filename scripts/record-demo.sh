@@ -31,8 +31,10 @@ require() {
 }
 require ffmpeg "brew install ffmpeg"
 require osascript "should ship with macOS"
+require swift "install Xcode Command Line Tools: xcode-select --install"
 [[ -d "$APP_PATH" ]] || { echo "record-demo: $APP_PATH not found — run: bash scripts/build-app.sh --install" >&2; exit 1; }
 [[ -d "$SAMPLES" ]] || { echo "record-demo: samples dir missing at $SAMPLES" >&2; exit 1; }
+[[ -f "$REPO_ROOT/scripts/peeky-window-id.swift" ]] || { echo "record-demo: missing scripts/peeky-window-id.swift" >&2; exit 1; }
 
 mkdir -p "$ASSETS"
 
@@ -42,19 +44,8 @@ kill_peeky() {
   sleep 0.4
 }
 
-peeky_window_rect() {
-  # Returns "x,y,w,h" of Peeky's front window via Accessibility, or empty.
-  osascript <<'APPLESCRIPT' 2>/dev/null || true
-try
-  tell application "System Events"
-    tell process "Peeky"
-      set p to position of window 1
-      set s to size of window 1
-      return ((item 1 of p) as text) & "," & ((item 2 of p) as text) & "," & ((item 1 of s) as text) & "," & ((item 2 of s) as text)
-    end tell
-  end tell
-end try
-APPLESCRIPT
+peeky_window_id() {
+  swift "$REPO_ROOT/scripts/peeky-window-id.swift" 2>/dev/null || true
 }
 
 peek_open() {
@@ -76,19 +67,19 @@ capture_stills() {
     IFS=":" read -r file suffix out <<< "$pair"
     kill_peeky
     peek_open "$SAMPLES/$file" "$suffix"
-    local rect=""
+    local wid=""
     for _ in $(seq 1 40); do
-      rect="$(peeky_window_rect | tr -d '[:space:]')"
-      [[ -n "$rect" ]] && break
+      wid="$(peeky_window_id | tr -d '[:space:]')"
+      [[ -n "$wid" ]] && break
       sleep 0.15
     done
-    if [[ -z "$rect" ]]; then
-      echo "  [warn] no Peeky window found for $file (grant Terminal.app Accessibility permission in System Settings → Privacy)" >&2
+    if [[ -z "$wid" ]]; then
+      echo "  [warn] no Peeky window found for $file (grant Terminal.app Screen Recording permission in System Settings → Privacy)" >&2
       continue
     fi
     sleep 0.7
-    screencapture -x -o -R "$rect" "$ASSETS/$out"
-    echo "  wrote $ASSETS/$out (rect=$rect)"
+    screencapture -x -o -l "$wid" "$ASSETS/$out"
+    echo "  wrote $ASSETS/$out (window=$wid)"
   done
   kill_peeky
 }
