@@ -12,6 +12,7 @@
 | `scripts/run-hidden-tests.sh <unit>` | 运行该单元的 hidden 测试，仅输出 `PASSED: X/Y` |
 | `node scripts/build-shiki-bundle.mjs` | 重新生成 `Sources/PeekyKit/Resources/shiki-bundle.js`（幂等；改语言或主题后运行） |
 | `node scripts/shiki-bundle/smoke.mjs` | bundle 冒烟测试：3 种语言 tokenize + dark_modern 配色 + 分块续接断言 |
+| `bash scripts/record-demo.sh` | 生成 README 用的 hero 视频与三张截图；子命令 `--stills` `--video`，屏幕索引 `--screen N` |
 
 > 本机仅 CommandLineTools：`swift test` 会构建但**不会执行**（CLT 缺 xctest 执行器）；请使用上表的 PeekyTests 可执行文件运行测试。
 
