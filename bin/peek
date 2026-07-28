@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
-# Usage: peek [<path>[:line[:col]]]  (no arg = peek .)
+# Usage:
+#   peek [--dev] [<path>[:line[:col]]]     no path = peek .
+#
+# --dev 强制走本地 dev 版(~/Applications/Peeky Dev.app,来自 bash scripts/build-app.sh --install)。
+# 默认按顺序探测:/Applications/Peeky.app (Cask) → ~/Applications/Peeky.app (用户装的正式版) → ~/Applications/Peeky Dev.app (fallback)。
 set -euo pipefail
 
-APP_PATH="$HOME/Applications/Peeky.app"
+force_dev=false
+if [[ "${1:-}" == "--dev" ]]; then
+  force_dev=true
+  shift
+fi
+
 raw_arg="${1:-.}"
 
 expand_path() {
@@ -34,6 +43,37 @@ print(quote(sys.argv[1], safe=""))
 ' "$1"
 }
 
+DEV_APP="$HOME/Applications/Peeky Dev.app"
+CASK_APP="/Applications/Peeky.app"
+USER_APP="$HOME/Applications/Peeky.app"
+
+if $force_dev; then
+  if [[ ! -d "$DEV_APP" ]]; then
+    echo "peek: --dev requested but $DEV_APP not found; run: bash scripts/build-app.sh --install" >&2
+    exit 1
+  fi
+  APP_PATH="$DEV_APP"
+else
+  APP_PATH=""
+  for candidate in "$CASK_APP" "$USER_APP" "$DEV_APP"; do
+    if [[ -d "$candidate" ]]; then
+      APP_PATH="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$APP_PATH" ]]; then
+    echo "peek: Peeky.app not found; install via 'brew install --cask peeky' or 'bash scripts/build-app.sh --install'" >&2
+    exit 1
+  fi
+fi
+
+# dev bundle 声明 peeky-dev:// scheme,正式 bundle 声明 peeky:// scheme。选中哪份就用哪份。
+if [[ "$APP_PATH" == "$DEV_APP" ]]; then
+  scheme="peeky-dev"
+else
+  scheme="peeky"
+fi
+
 abs_arg="$(expand_path "$raw_arg")"
 
 target="$abs_arg"
@@ -56,15 +96,10 @@ if [[ ! -e "$target" ]]; then
   exit 1
 fi
 
-if [[ ! -d "$APP_PATH" ]]; then
-  echo "peek: Peeky.app not found at $APP_PATH; run: bash scripts/build-app.sh --install" >&2
-  exit 1
-fi
-
 encoded_path="$(urlencode "$target")"
 encoded_cwd="$(urlencode "$PWD")"
 
-url="peeky://open?path=${encoded_path}&cwd=${encoded_cwd}"
+url="${scheme}://open?path=${encoded_path}&cwd=${encoded_cwd}"
 if [[ -n "$line" ]]; then
   url="${url}&line=${line}"
 fi

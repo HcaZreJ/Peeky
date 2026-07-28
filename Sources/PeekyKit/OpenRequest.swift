@@ -46,7 +46,10 @@ struct OpenRequest {
             return fileURL(url)
         }
 
-        guard url.scheme?.lowercased() == "peeky" else {
+        // 接受 peeky:// (正式 bundle) 和 peeky-dev:// (bash scripts/build-app.sh --install 装的 dev bundle)。
+        // 两个 scheme 分别在两个 Info.plist 里声明,LaunchServices 各走各的,同一进程只会看到自己声明的那个。
+        let scheme = url.scheme?.lowercased()
+        guard scheme == "peeky" || scheme == "peeky-dev" else {
             return nil
         }
 
