@@ -22,46 +22,38 @@ Peeky 是 macOS 上的只读文件预览器，解决用 IDE 打开 AI 产出的�
 
 前置条件：macOS 13 或更高版本。
 
-### Homebrew（推荐，自带 `peek` 命令）
+### Homebrew（推荐）
 
 ```sh
 brew tap HcaZreJ/peeky
+brew trust hcazrej/peeky
 brew install --cask peeky
 ```
 
-装完 `Peeky.app` 在 `/Applications`，`peek` 命令自动进 PATH。终端里 `peek foo.md` 立刻可用。
+装完 `Peeky.app` 在 `/Applications`，`peek` 命令自动进 PATH。
 
-### GitHub Release 下载 zip
-
-去 [Releases](https://github.com/HcaZreJ/Peeky/releases) 下载最新的 `Peeky-vX.Y.Z.zip`，解压后把 `Peeky.app` 拖到 `/Applications`。
-
-首次打开会弹"无法验证开发者"——Peeky 是 ad-hoc 签名，苹果没扫过。放行步骤：
+首次跑 `peek` 或双击 `Peeky.app` 会弹"无法验证开发者"，按以下步骤放行一次：
 
 1. 弹窗上点"取消"或"完成"
 2. 打开 系统设置 → 隐私与安全性
-3. 滚到底部，会看到一行"已阻止 Peeky.app，因为无法验证开发者"
-4. 点旁边的"仍要打开"，输密码/Touch ID
-5. 再双击 `Peeky.app` 就正常打开，以后不再需要放行
+3. 滚到底部，点"已阻止 Peeky.app"旁边的"仍要打开"，输密码/Touch ID
+4. 再跑 `peek` 就正常打开
 
-这个渠道不含 `peek` 命令；需要终端 `peek path` 的话走上面的 Homebrew 路径。
+每次 `brew upgrade --cask peeky` 升级后，首次打开需要重复这个流程。
 
-### 从源码构建（开发者）
+### GitHub Release
+
+去 [Releases](https://github.com/HcaZreJ/Peeky/releases) 下载最新的 `Peeky-vX.Y.Z.zip`，解压后把 `Peeky.app` 拖到 `/Applications`。首次打开需要按上面同样的步骤放行一次。
+
+不含 `peek` 命令。
+
+### 从源码构建
 
 ```sh
 bash scripts/build-app.sh --install
 ```
 
-前置需要 Swift toolchain（Xcode 或 Command Line Tools）。装出来是「dev 版」，与 Homebrew Cask 装的正式版完全隔离，可以在同一台机器共存：
-
-| 维度 | Cask 正式版 | 本地 dev 版 |
-|---|---|---|
-| Bundle ID | `local.peeky` | `local.peeky.dev` |
-| App 位置 | `/Applications/Peeky.app` | `~/Applications/Peeky Dev.app` |
-| URL scheme | `peeky://` | `peeky-dev://` |
-| Preferences | `local.peeky.plist` | `local.peeky.dev.plist` |
-| CLI symlink | `/opt/homebrew/bin/peek` | `~/.local/bin/peek` |
-
-LaunchServices 把它们当两个完全独立的 app，`peeky://` 链接和 Finder 双击总是路由到正式版，不会被 dev 版抢走；dev 版通过 `peek --dev` 显式打开。
+需要 Swift toolchain（Xcode 或 Command Line Tools）。装出来是 dev 版（`~/Applications/Peeky Dev.app`），与 Homebrew 装的正式版能共存，用 `peek --dev` 打开。
 
 只构建、不安装：
 
@@ -69,7 +61,7 @@ LaunchServices 把它们当两个完全独立的 app，`peeky://` 链接和 Find
 bash scripts/build-app.sh
 ```
 
-产物位置：`.build/Peeky.app`（未做 dev 特化，供 CI 打包）。
+产物位置：`.build/Peeky.app`。
 
 ## 用法
 
@@ -81,12 +73,10 @@ peek path/to/file          # 打开单个文件
 peek path/to/file:12       # 打开并跳到第 12 行
 peek path/to/file:12:8     # 跳到第 12 行第 8 列
 peek a.md b.jsonl          # 同时打开多个文件，每个文件占一个标签页
-peek --dev path/to/file    # 强制走本地 dev 版（~/Applications/Peeky Dev.app）
+peek --dev path/to/file    # 打开源码装的 dev 版
 ```
 
 行号和列号必须为正整数（正则 `[1-9][0-9]*`）。路径支持 `~` 展开。
-
-不加 `--dev` 时，`peek` 按 `/Applications/Peeky.app`（Cask 正式版）→ `~/Applications/Peeky.app`（用户手装的正式版）→ `~/Applications/Peeky Dev.app`（dev fallback）顺序找到第一个存在的 app 使用。
 
 ### `peeky://` URL scheme
 
@@ -177,7 +167,7 @@ swift build                          # debug
 swift build -c release               # release
 swift run Peeky path/to/file         # 直接运行
 bash scripts/build-app.sh            # 组装 .build/Peeky.app（ad-hoc codesign）
-bash scripts/build-app.sh --install  # 组装并安装到 ~/Applications、~/.local/bin
+bash scripts/build-app.sh --install  # 组装并安装 dev 版到 ~/Applications/Peeky Dev.app
 ```
 
 重新生成 shiki bundle（改语言或主题后需要运行）：
