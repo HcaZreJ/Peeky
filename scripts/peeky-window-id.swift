@@ -1,5 +1,16 @@
 import Cocoa
 
+if CommandLine.arguments.contains("--preflight") {
+    if #available(macOS 11.0, *) {
+        if !CGPreflightScreenCaptureAccess() {
+            _ = CGRequestScreenCaptureAccess()
+            FileHandle.standardError.write(Data("Screen Recording permission missing for this terminal. Enable it in System Settings → Privacy & Security → Screen Recording, then quit and reopen the terminal before rerunning.\n".utf8))
+            exit(2)
+        }
+    }
+    exit(0)
+}
+
 let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
 for entry in list {
     guard

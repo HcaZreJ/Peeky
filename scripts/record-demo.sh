@@ -38,6 +38,15 @@ require swift "install Xcode Command Line Tools: xcode-select --install"
 
 mkdir -p "$ASSETS"
 
+preflight_screen_recording() {
+  if ! swift "$REPO_ROOT/scripts/peeky-window-id.swift" --preflight; then
+    echo "record-demo: opening System Settings to Screen Recording page..." >&2
+    open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture" >/dev/null 2>&1 || true
+    exit 3
+  fi
+}
+preflight_screen_recording
+
 kill_peeky() {
   osascript -e 'tell application "Peeky" to quit' >/dev/null 2>&1 || true
   pkill -x Peeky >/dev/null 2>&1 || true
