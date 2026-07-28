@@ -40,13 +40,32 @@ codesign --force --sign - "$APP_DIR"
 echo "$APP_DIR"
 
 if [[ "${1:-}" == "--install" ]]; then
-  INSTALL_DIR="$HOME/Applications/Peeky.app"
+  # --install 装的是「dev 版」:独立 bundle ID / app name / URL scheme,
+  # 与 Homebrew Cask 装的正式版(/Applications/Peeky.app)完全隔离,LaunchServices 各走各的。
+  INSTALL_DIR="$HOME/Applications/Peeky Dev.app"
   mkdir -p "$HOME/Applications"
+
+  # 清理旧版 --install 遗留(旧脚本装的是 Peeky.app,新脚本改装 Peeky Dev.app)。
+  if [[ -d "$HOME/Applications/Peeky.app" ]]; then
+    echo "note: removing legacy $HOME/Applications/Peeky.app (--install now creates Peeky Dev.app)"
+    rm -rf "$HOME/Applications/Peeky.app"
+  fi
+
   rm -rf "$INSTALL_DIR"
   cp -R "$APP_DIR" "$INSTALL_DIR"
+
+  # 转换成 dev 身份。改完 Info.plist 会让原签名失效,需要重新 ad-hoc 签。
+  PLIST="$INSTALL_DIR/Contents/Info.plist"
+  /usr/bin/plutil -replace CFBundleIdentifier -string "local.peeky.dev" "$PLIST"
+  /usr/bin/plutil -replace CFBundleName -string "Peeky Dev" "$PLIST"
+  /usr/bin/plutil -replace CFBundleDisplayName -string "Peeky Dev" "$PLIST"
+  # 用 -json 整体替换 schemes 数组;-replace 对数组元素是 insert 而非替换,会残留原 scheme。
+  /usr/bin/plutil -replace 'CFBundleURLTypes.0.CFBundleURLSchemes' -json '["peeky-dev"]' "$PLIST"
+  codesign --force --sign - "$INSTALL_DIR"
+
   echo "$INSTALL_DIR"
 
-  # symlink 指 bundle 里的 peek,让"本地 --install"和"brew install --cask"对齐同一份 peek 源。
+  # symlink 指 dev bundle 里的 peek;peek 脚本内部会按 --dev flag / 位置探测决定用哪个 app。
   mkdir -p "$HOME/.local/bin"
   ln -sf "$INSTALL_DIR/Contents/Resources/peek" "$HOME/.local/bin/peek"
   echo "$HOME/.local/bin/peek"

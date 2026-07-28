@@ -51,7 +51,17 @@ brew install --cask peeky
 bash scripts/build-app.sh --install
 ```
 
-前置需要 Swift toolchain（Xcode 或 Command Line Tools）。该命令做两件事：把 `.build/Peeky.app` 复制到 `~/Applications/Peeky.app`；把 bundle 里的 `peek` 通过 symlink 链接到 `~/.local/bin/peek`。
+前置需要 Swift toolchain（Xcode 或 Command Line Tools）。装出来是「dev 版」，与 Homebrew Cask 装的正式版完全隔离，可以在同一台机器共存：
+
+| 维度 | Cask 正式版 | 本地 dev 版 |
+|---|---|---|
+| Bundle ID | `local.peeky` | `local.peeky.dev` |
+| App 位置 | `/Applications/Peeky.app` | `~/Applications/Peeky Dev.app` |
+| URL scheme | `peeky://` | `peeky-dev://` |
+| Preferences | `local.peeky.plist` | `local.peeky.dev.plist` |
+| CLI symlink | `/opt/homebrew/bin/peek` | `~/.local/bin/peek` |
+
+LaunchServices 把它们当两个完全独立的 app，`peeky://` 链接和 Finder 双击总是路由到正式版，不会被 dev 版抢走；dev 版通过 `peek --dev` 显式打开。
 
 只构建、不安装：
 
@@ -59,7 +69,7 @@ bash scripts/build-app.sh --install
 bash scripts/build-app.sh
 ```
 
-产物位置：`.build/Peeky.app`。
+产物位置：`.build/Peeky.app`（未做 dev 特化，供 CI 打包）。
 
 ## 用法
 
@@ -71,9 +81,12 @@ peek path/to/file          # 打开单个文件
 peek path/to/file:12       # 打开并跳到第 12 行
 peek path/to/file:12:8     # 跳到第 12 行第 8 列
 peek a.md b.jsonl          # 同时打开多个文件，每个文件占一个标签页
+peek --dev path/to/file    # 强制走本地 dev 版（~/Applications/Peeky Dev.app）
 ```
 
 行号和列号必须为正整数（正则 `[1-9][0-9]*`）。路径支持 `~` 展开。
+
+不加 `--dev` 时，`peek` 按 `/Applications/Peeky.app`（Cask 正式版）→ `~/Applications/Peeky.app`（用户手装的正式版）→ `~/Applications/Peeky Dev.app`（dev fallback）顺序找到第一个存在的 app 使用。
 
 ### `peeky://` URL scheme
 
