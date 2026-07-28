@@ -15,6 +15,16 @@ cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$ROOT_DIR/Resources/Peeky.icns" "$APP_DIR/Contents/Resources/Peeky.icns"
 chmod +x "$APP_DIR/Contents/MacOS/Peeky"
 
+# peek CLI 打进 bundle,Homebrew Cask 用 binary stanza 直接 symlink 到 PATH。
+cp "$ROOT_DIR/bin/peek" "$APP_DIR/Contents/Resources/peek"
+chmod +x "$APP_DIR/Contents/Resources/peek"
+
+# PEEKY_VERSION 由 CI 从 git tag 注入(去掉 v 前缀);本地构建不设置则沿用 Info.plist 里的现值。
+if [[ -n "${PEEKY_VERSION:-}" ]]; then
+  /usr/bin/plutil -replace CFBundleShortVersionString -string "$PEEKY_VERSION" "$APP_DIR/Contents/Info.plist"
+  /usr/bin/plutil -replace CFBundleVersion -string "$PEEKY_VERSION" "$APP_DIR/Contents/Info.plist"
+fi
+
 # SwiftPM copies PeekyKit's declared resources (shiki-bundle.js) into a
 # `Peeky_PeekyKit.bundle` next to the release binary. HighlightService's
 # loadBundleSource() looks for it under Bundle.main.resourceURL first
@@ -36,8 +46,9 @@ if [[ "${1:-}" == "--install" ]]; then
   cp -R "$APP_DIR" "$INSTALL_DIR"
   echo "$INSTALL_DIR"
 
+  # symlink 指 bundle 里的 peek,让"本地 --install"和"brew install --cask"对齐同一份 peek 源。
   mkdir -p "$HOME/.local/bin"
-  ln -sf "$ROOT_DIR/bin/peek" "$HOME/.local/bin/peek"
+  ln -sf "$INSTALL_DIR/Contents/Resources/peek" "$HOME/.local/bin/peek"
   echo "$HOME/.local/bin/peek"
 
   RESOLVED_PEEK="$(command -v peek || true)"

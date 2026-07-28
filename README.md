@@ -15,17 +15,40 @@ Peeky 是 macOS 上的只读文件预览器，解决用 IDE 打开 AI 产出的�
 
 ## 安装
 
-前置条件：macOS 13 或更高版本；已安装 Swift toolchain（Xcode 或 Command Line Tools）。
+前置条件：macOS 13 或更高版本。
 
-一步安装：
+### Homebrew（推荐，自带 `peek` 命令）
+
+```sh
+brew tap HcaZreJ/peeky
+brew install --cask peeky
+```
+
+装完 `Peeky.app` 在 `/Applications`，`peek` 命令自动进 PATH。终端里 `peek foo.md` 立刻可用。
+
+### GitHub Release 下载 zip
+
+去 [Releases](https://github.com/HcaZreJ/Peeky/releases) 下载最新的 `Peeky-vX.Y.Z.zip`，解压后把 `Peeky.app` 拖到 `/Applications`。
+
+首次打开会弹"无法验证开发者"——Peeky 是 ad-hoc 签名，苹果没扫过。放行步骤：
+
+1. 弹窗上点"取消"或"完成"
+2. 打开 系统设置 → 隐私与安全性
+3. 滚到底部，会看到一行"已阻止 Peeky.app，因为无法验证开发者"
+4. 点旁边的"仍要打开"，输密码/Touch ID
+5. 再双击 `Peeky.app` 就正常打开，以后不再需要放行
+
+这个渠道不含 `peek` 命令；需要终端 `peek path` 的话走上面的 Homebrew 路径。
+
+### 从源码构建（开发者）
 
 ```sh
 bash scripts/build-app.sh --install
 ```
 
-该命令做两件事：把 `.build/Peeky.app` 复制到 `~/Applications/Peeky.app`；把仓库里的 `bin/peek` 通过 symlink 链接到 `~/.local/bin/peek`。之后可以在终端直接调用 `peek`。
+前置需要 Swift toolchain（Xcode 或 Command Line Tools）。该命令做两件事：把 `.build/Peeky.app` 复制到 `~/Applications/Peeky.app`；把 bundle 里的 `peek` 通过 symlink 链接到 `~/.local/bin/peek`。
 
-只需要构建、不安装：
+只构建、不安装：
 
 ```sh
 bash scripts/build-app.sh
