@@ -1469,6 +1469,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         renderActiveTab()
     }
 
+    /// ⌘W 的关闭入口：与侧栏 tab 上的关闭按钮共用同一条收尾链路。
+    func closeActiveTab() {
+        guard let activeTabID else { return }
+        closeTab(id: activeTabID)
+    }
+
     private func closeTab(id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         let closingActiveTab = tabs[index].id == activeTabID

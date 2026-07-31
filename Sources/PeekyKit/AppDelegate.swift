@@ -76,7 +76,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         openItem.target = self
         fileMenu.addItem(openItem)
         fileMenu.addItem(.separator())
-        fileMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+
+        let closeFileItem = NSMenuItem(
+            title: "Close File",
+            action: #selector(closeFileAction(_:)),
+            keyEquivalent: "w"
+        )
+        closeFileItem.target = self
+        fileMenu.addItem(closeFileItem)
+
+        let closeWindowItem = NSMenuItem(
+            title: "Close Window",
+            action: #selector(closeWindowAction(_:)),
+            keyEquivalent: "w"
+        )
+        closeWindowItem.keyEquivalentModifierMask = [.command, .shift]
+        closeWindowItem.target = self
+        fileMenu.addItem(closeWindowItem)
 
         let editMenuItem = NSMenuItem()
         mainMenu.addItem(editMenuItem)
@@ -149,7 +165,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     /// 复制四件套：无打开文件时全部禁用；相对路径项额外要求命中 repo root。
+    /// 两个关闭项要求存在 key 窗口。
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        let closeActions: Set<Selector> = [
+            #selector(closeFileAction(_:)),
+            #selector(closeWindowAction(_:))
+        ]
+
+        if let action = menuItem.action, closeActions.contains(action) {
+            return closeTargetWindow() != nil
+        }
+
         let copyActions: Set<Selector> = [
             #selector(copyAllTextAction(_:)),
             #selector(copyFileNameAction(_:)),
@@ -187,6 +213,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     @objc private func copyRelativePathAction(_ sender: Any?) {
         activeWindowController()?.copyRelativePath()
+    }
+
+    // MARK: - 关闭（⌘W 关文件，⇧⌘W 关窗口）
+
+    /// 关闭目标窗口当前显示的文件；该窗口没有打开文件时（空窗口、About 等面板）关闭窗口本身，
+    /// 让 ⌘W 连按可以「一个个关掉文件，最后关窗」。
+    @objc private func closeFileAction(_ sender: Any?) {
+        guard let window = closeTargetWindow() else { return }
+
+        if let controller = windows.first(where: { $0.window === window }), !controller.isEmpty {
+            controller.closeActiveTab()
+        } else {
+            window.performClose(sender)
+        }
+    }
+
+    @objc private func closeWindowAction(_ sender: Any?) {
+        closeTargetWindow()?.performClose(sender)
+    }
+
+    /// 关闭动作的落点：key 窗口优先，与复制四件套的 activeWindowController() 同一取法。
+    private func closeTargetWindow() -> NSWindow? {
+        NSApp.keyWindow ?? NSApp.mainWindow
     }
 
     private func showOpenPanel() {

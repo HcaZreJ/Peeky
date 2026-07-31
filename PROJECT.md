@@ -6,7 +6,7 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 ## 功能清单与状态
 | 功能 | 状态 |
 |---|---|
-| 多窗口 + 每窗口多 tab；打开新文件时复用当前 key window | ✅ |
+| 多窗口 + 每窗口多 tab；打开新文件时复用当前 key window；⌘W 关闭当前文件（窗口已无文件时关闭窗口），⇧⌘W 关闭窗口 | ✅ |
 | `peeky://open` URL scheme + CLI `path:line[:column]` 支持行列跳转 | ✅ |
 | 侧栏文件树：`RepoRoot` 识别代码仓库根，`DirectoryLister` 按需枚举一级子项 | ✅ |
 | 侧栏三个 tab（Open / Files / Contents）单选切换；Markdown 无大纲时 Contents 置灰回退 Files；选择通过 UserDefaults 持久化 | ✅ |

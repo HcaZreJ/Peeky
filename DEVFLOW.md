@@ -30,6 +30,7 @@
 - **任何 UI 或渲染改动必须在浅色与深色两种外观下各测试一次**（通过系统外观切换或 `defaults write -g AppleInterfaceStyle`）；颜色相关改动还需在两种外观下验证 resolve 后的亮度断言（背景与前景对比方向正确）。
 - `swift run Peeky <md>` 打开后能直接显示 Markdown，侧栏 Contents tab 里的大纲支持点击跳转；Open / Files / Contents 三个 tab 点击切换，并记住上次选择；非 Markdown 文件的 Contents 置灰，自动回退到 Files。
 - 多标题的 Markdown（≥40 个标题）打开后窗口高度不超出屏幕，可以自由 resize；Contents tab 的大纲占满侧栏高度，超出时自行滚动。
+- 一个窗口里打开多个文件后连按 ⌘W：每次关掉当前文件并切到相邻文件，文件全部关完后窗口停在空状态，再按一次才关窗；⇧⌘W 任何时候直接关窗。
 - `<json>` / `<jsonl>` 打开后应显示缩进格式化 + 词法高亮（key / 字符串 / 数字 / bool / null / 标点；浅色 GitHub Light、深色 VS Code Dark Modern，跟随系统明暗）；鼠标选中 ⌘C 可复制；行号 gutter 显示；JSONL 解析失败的行以红底红字标出，gutter 显示 "!"；滚动时可视区即时高亮，大文件不阻塞。
 - `<py / ts / yaml …>` 打开后应显示 Dark Modern 主题高亮，深色背景统一；选中 ⌘C 可复制；⌘E 打开系统默认编辑器并跳到当前行。
 - `.app` bundle 打包后，执行 `open "peeky://open?path=...&line=N"` 应打开正式版 Peeky 并定位到指定行；`open "peeky-dev://open?path=...&line=N"` 应打开本地 dev 版。
