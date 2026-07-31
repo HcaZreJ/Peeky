@@ -11,7 +11,7 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 | 侧栏文件树：`RepoRoot` 识别代码仓库根，`DirectoryLister` 按需枚举一级子项 | ✅ |
 | 侧栏三个 tab（Open / Files / Contents）单选切换；Markdown 无大纲时 Contents 置灰回退 Files；选择通过 UserDefaults 持久化 | ✅ |
 | `peek` shell 包装（`bin/peek`），`build-app.sh --install` 一并部署到 `~/Applications` 与 `~/.local/bin` | ✅ |
-| Markdown：swift-markdown 解析为 HTML（`MarkdownHTMLRenderer`），WKWebView 用 github-markdown.css 渲染；支持表格、任务列表、嵌套引用、围栏代码块、标题分隔线等 GFM 特性；侧栏大纲支持点击跳转；代码块内语法高亮跟踪于 issue #16 | ✅ |
+| Markdown：swift-markdown 解析为 HTML（`MarkdownHTMLRenderer`），WKWebView 用 github-markdown.css 渲染；支持表格、任务列表、嵌套引用、围栏代码块、标题分隔线等 GFM 特性；侧栏大纲支持点击跳转；正文链接点击交系统默认浏览器/程序打开（文档内锚点留在页内），预览停留在当前文档；代码块内语法高亮跟踪于 issue #16 | ✅ |
 | JSON / JSONL：缩进格式化 + 词法高亮（键 / 字符串 / 数字 / bool / null / 标点）+ ⌘C 选中复制；可视区惰性上色（`NSLayoutManager` 临时属性，只处理屏幕可见行），大文件不阻塞；跟随系统明暗；JSONL 解析失败的行以红色标注 | ✅ |
 | JSON / JSONL 交互：gutter 折叠三角（对象和数组点击折叠/展开，行号连续）、折叠占位符 `⟷`、缩进虚线导轨、底部状态栏（行、列、选中字符数、文件大小，坐标以源文件为准）、双击选中整个 element、折叠状态下复制展开为完整 JSON；折叠映射与坐标计算是纯函数模块（`JSONFoldMap` / `JSONFoldComposer`），配色新增 7 个语义 token 到 `PeekyTheme` | ✅ |
 | 源码语法高亮：JavaScriptCore + shiki，VS Code Dark Modern 主题，覆盖 16 个扩展名（py / ts / js / mjs / cjs / json / yaml / yml / toml / sh / bash / zsh / swift / ini / conf / config）；流式分块高亮 + 启动预热；超过 1.5M UTF-16 字符时回退为等宽原文 | ✅ |
@@ -37,11 +37,11 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 ```
 main → AppDelegate → { OpenRequest, PreviewWindowController }
 PreviewWindowController(约 1.8k 行,唯一持有状态的 UI 控制器)
-  → TextFileLoader / PreviewRenderer / MarkdownHTMLRenderer / PreviewDisplayMetadata / HighlightService
+  → TextFileLoader / PreviewRenderer / MarkdownHTMLRenderer / MarkdownLinkPolicy / PreviewDisplayMetadata / HighlightService
   → WKWebView(Markdown 预览) / PreviewGutterView(NSRulerView) / FileTreeView / Drop*View / FileKind / PeekyTheme / JSONHighlighter
 MarkdownHTMLRenderer(Markdown → HTML,交给 WebView);PreviewRenderer(非 Markdown 的路径选择与编排)
   → JSONFormatter / XMLFormatter / SyntaxHighlighter / MarkdownRenderer(大纲抽取 + 超 8 MB 时的兜底) / FileKind
-叶子纯函数模块:JSONFormatter · JSONHighlighter · PeekyTheme · MarkdownHTMLRenderer · XMLFormatter · MarkdownRenderer · SyntaxHighlighter · RepoRoot · DirectoryLister
+叶子纯函数模块:JSONFormatter · JSONHighlighter · PeekyTheme · MarkdownHTMLRenderer · MarkdownLinkPolicy(链接点击导航分流) · XMLFormatter · MarkdownRenderer · SyntaxHighlighter · RepoRoot · DirectoryLister
 服务单例:HighlightService(JSC + shiki-bundle,私有串行队列,资源缺失或 JS 异常时永久降级为纯文本)
 ```
 
