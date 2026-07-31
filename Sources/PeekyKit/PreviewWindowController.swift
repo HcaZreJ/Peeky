@@ -1688,6 +1688,32 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         setStatusBarVisible(false)
     }
 
+    /// 用户点击 markdown 里的链接 → 交系统默认浏览器/程序打开，WebView 停留在
+    /// 当前文档；文档内锚点跳转与 loadHTMLString 程序性加载放行。分流逻辑在
+    /// MarkdownLinkPolicy。
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
+    ) {
+        guard webView === markdownWebView else {
+            decisionHandler(.allow)
+            return
+        }
+        switch MarkdownLinkPolicy.decision(
+            for: navigationAction.request.url,
+            isLinkActivated: navigationAction.navigationType == .linkActivated
+        ) {
+        case .allow:
+            decisionHandler(.allow)
+        case .cancel:
+            decisionHandler(.cancel)
+        case .openExternally(let url):
+            NSWorkspace.shared.open(url)
+            decisionHandler(.cancel)
+        }
+    }
+
     /// WebView 载入完成：若有待定源行，滚到 sourceLine 不超过它的最后一个标题（就近定位）。
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard webView === markdownWebView, let line = pendingMarkdownScrollLine else { return }
