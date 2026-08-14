@@ -28,6 +28,11 @@ struct RenderedPreview {
     let usesJSONHighlighting: Bool
     /// true = 编辑器区背景/前景/token 走 `PeekyTheme` 跟随系统 light/dark 外观。
     let followsSystemAppearance: Bool
+    /// true = 本次渲染的源文本是结构解析成功的 JSON（.json 成功分支 / .jsonl，坏行由
+    /// JSONPathMap 的空行清栈隔离在本条记录内）；.json 失败分支（sourceText 是未格式化
+    /// 的原文，既非 2 空格缩进也不保证括号配对）与其它 kind 均为 false。控制器据此决定
+    /// 是否在该 tab 建 JSONPathMap 路径索引——为 false 时绝不显示"推测路径"。
+    let jsonStructureIsValid: Bool
 
     init(
         attributedText: NSAttributedString,
@@ -36,7 +41,8 @@ struct RenderedPreview {
         display: PreviewDisplayMetadata = .plain,
         highlightLanguage: String? = nil,
         usesJSONHighlighting: Bool = false,
-        followsSystemAppearance: Bool = false
+        followsSystemAppearance: Bool = false,
+        jsonStructureIsValid: Bool = false
     ) {
         self.attributedText = attributedText
         self.note = note
@@ -45,6 +51,7 @@ struct RenderedPreview {
         self.highlightLanguage = highlightLanguage
         self.usesJSONHighlighting = usesJSONHighlighting
         self.followsSystemAppearance = followsSystemAppearance
+        self.jsonStructureIsValid = jsonStructureIsValid
     }
 
     var usesDarkModernTheme: Bool { highlightLanguage != nil }
@@ -81,7 +88,8 @@ enum PreviewRenderer {
                     note: "Formatted",
                     display: .lineNumbers(for: pretty),
                     usesJSONHighlighting: true,
-                    followsSystemAppearance: true
+                    followsSystemAppearance: true,
+                    jsonStructureIsValid: true
                 )
             } catch {
                 return RenderedPreview(
@@ -105,7 +113,8 @@ enum PreviewRenderer {
                 note: notes.joined(separator: ", "),
                 display: .jsonLines(text: result.text, records: result.records),
                 usesJSONHighlighting: true,
-                followsSystemAppearance: true
+                followsSystemAppearance: true,
+                jsonStructureIsValid: true
             )
         case .xml:
             do {

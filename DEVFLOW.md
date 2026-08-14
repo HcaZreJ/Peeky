@@ -32,6 +32,7 @@
 - 多标题的 Markdown（≥40 个标题）打开后窗口高度不超出屏幕，可以自由 resize；Contents tab 的大纲占满侧栏高度，超出时自行滚动。
 - 一个窗口里打开多个文件后连按 ⌘W：每次关掉当前文件并切到相邻文件，文件全部关完后窗口停在空状态，再按一次才关窗；⇧⌘W 任何时候直接关窗。
 - `<json>` / `<jsonl>` 打开后应显示缩进格式化 + 词法高亮（key / 字符串 / 数字 / bool / null / 标点；浅色 GitHub Light、深色 VS Code Dark Modern，跟随系统明暗）；鼠标选中 ⌘C 可复制；行号 gutter 显示；JSONL 解析失败的行以红底红字标出，gutter 显示 "!"；滚动时可视区即时高亮，大文件不阻塞。
+- `<json>` / `<jsonl>` 的节点路径：光标落在任意行，底部状态栏在 Ln/Col 之后显示该行的 jq 路径；选中该行出现两个浮动 chip（"jq path" 在左、"path:line" 在右，窗口右缘也不重叠），点 "jq path" 复制的表达式能直接 `jq '<粘贴>' <file>` 跑出该行的值，⌥ 点击复制 `users.0.user.phone` 点分形态；折叠某容器后光标落在折叠行显示该容器自身的路径；切到非 JSON 文件后状态栏无路径段、jq chip 不出现；语法错误的 JSON 不显示任何路径。
 - `<py / ts / yaml …>` 打开后应显示 Dark Modern 主题高亮，深色背景统一；选中 ⌘C 可复制；⌘E 打开系统默认编辑器并跳到当前行。
 - `.app` bundle 打包后，执行 `open "peeky://open?path=...&line=N"` 应打开正式版 Peeky 并定位到指定行；`open "peeky-dev://open?path=...&line=N"` 应打开本地 dev 版。
 - 大文件的行为：非 JSON / JSONL 且大于 8 MB 时降级为 raw，不阻塞界面；JSON / JSONL 仍然进行缩进格式化 + 可视区惰性高亮，即使大文件也不阻塞。
