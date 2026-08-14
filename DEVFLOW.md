@@ -13,6 +13,7 @@
 | `node scripts/build-shiki-bundle.mjs` | 重新生成 `Sources/PeekyKit/Resources/shiki-bundle.js`（幂等；改语言或主题后运行） |
 | `node scripts/shiki-bundle/smoke.mjs` | bundle 冒烟测试：3 种语言 tokenize + dark_modern 配色 + 分块续接断言 |
 | `bash scripts/record-demo.sh` | 生成 README 用的 hero 视频与三张截图；子命令 `--stills` `--video`，屏幕索引 `--screen N` |
+| `git tag vX.Y.Z && git push origin vX.Y.Z` | 发布：触发 CI 构建 + GitHub Release + 更新 Homebrew cask（见「发布」） |
 
 > 本机仅 CommandLineTools：`swift test` 会构建但**不会执行**（CLT 缺 xctest 执行器）；请使用上表的 PeekyTests 可执行文件运行测试。
 
@@ -25,6 +26,40 @@
 ## 分支 / 上游
 - 开发在本 fork 的 `main`；上游 `zhangzhejian/Peeky` 不追随，保持 commit 可回贡到上游的干净状态（一个功能一个干净的 commit）。
 - 提交粒度是 plan 级，用户批准后 commit；不主动 push。
+
+## 发布
+
+唯一的 workflow 是 `.github/workflows/build-app.yml`，触发条件只有两个：push 一个 `v*` tag，
+或在 Actions 页手动 `workflow_dispatch`（可指定任意 branch / tag / SHA 构建）。
+**合并到 `main` 不触发任何 CI，也不产出新版本**；仓库没有自动化测试闸门，测试闸门是本地的
+`swift build --product PeekyTests && ./.build/debug/PeekyTests`。
+
+发一个版本：
+
+```sh
+git checkout main && git pull
+git tag v0.4.0        # 版本号去掉 v 前缀后成为 PEEKY_VERSION，写进 Info.plist
+git push origin v0.4.0
+```
+
+tag 触发的 CI 依次做：`scripts/build-app.sh` 构建 → `ditto` 打包成
+`Peeky-v0.4.0.zip` → 上传 artifact → 创建同名 GitHub Release 并附上 zip →
+更新 Homebrew tap（clone `HcaZreJ/homebrew-peeky`，把 `Casks/peeky.rb` 的 `version` 与
+`sha256` 改成本次产物的值并 push）。tap 更新依赖仓库 secret `TAP_PUSH_TOKEN`
+（对 `HcaZreJ/homebrew-peeky` 有 contents:write 的 fine-grained PAT）；secret 缺失时
+这一步跳过、release 仍然产出。
+
+手动 `workflow_dispatch` 只构建并上传 artifact，不创建 Release、不更新 tap
+（版本号非 `vX.Y.Z` 形态时 `is_release` 为 false）。
+
+用户侧升级到新版本：
+
+```sh
+brew upgrade --cask peeky
+```
+
+升级后首次打开需要重新过一次 Gatekeeper 放行（ad-hoc 签名，非 Apple 公证），
+步骤见 README 的安装章节。
 
 ## 手动验收清单
 - **任何 UI 或渲染改动必须在浅色与深色两种外观下各测试一次**（通过系统外观切换或 `defaults write -g AppleInterfaceStyle`）；颜色相关改动还需在两种外观下验证 resolve 后的亮度断言（背景与前景对比方向正确）。
