@@ -308,6 +308,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// 选区触发的浮动 Copy Path:Line 按钮：住在 scrollView.contentView 顶层，不参与
     /// 文档滚动；位置由 updateSelectionActionButton() 主动同步（见滚动/选区观察）。
     private let selectionActionButton = NSButton()
+    /// jq path 浮动 chip：与 selectionActionButton（path:line）成组布局，仅在
+    /// currentJSONPath() 非 nil 时参与显示；见 positionSelectionActionButton。
+    private let jqPathChipButton = NSButton()
     private var selectionUpdateTimer: Timer?
     private let emptyView = NSStackView()
     /// 底部状态栏（Ln/Col/选中数/size）：所有 textView 类模式启用，markdown WebView /
@@ -368,6 +371,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// 记录分隔线 / 坏行区间据此在每次 applyFoldState() 时经 visibleRange(forSource:)
     /// remap；`.lineNumbers` 模式不需要它（直接用可见文本重建）。
     private var foldOriginalDisplay: PreviewDisplayMetadata?
+    /// 当前 JSON/JSONL 渲染的逐行节点路径索引（jq path chip + 状态栏路径显示的数据源）；
+    /// 与 foldMap 同生命周期——beginFoldContext 在 JSONFoldMap.build **之后串行**构建
+    /// （峰值不叠加），只在 RenderedPreview.jsonStructureIsValid 为 true（结构解析成功）
+    /// 时才构建，clearFoldContext 与 foldMap 一并清 nil。为 nil 时 currentJSONPath()
+    /// 恒返回 nil，状态栏不追加路径段，jq chip 不参与布局/显示——不显示"推测路径"。
+    private var jsonPathMap: JSONPathMap?
     /// 每次新渲染落地（beginFoldContext/clearFoldContext）递增；折叠相关的后台任务
     /// （foldMap.build / >2MB compose）完成时校验代际未过期才落地，防止 tab 切换/
     /// 重新渲染后迟到的结果覆盖新内容。
@@ -531,6 +540,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         // 浮动选区按钮住 contentView 顶层，必须晚于 scrollView/markdownWebView 加入，
         // 保证其 z-order 覆盖两条渲染路径（addSubview 默认叠在已有 subview 之上）。
         setupSelectionActionButton()
+        setupJQPathChipButton()
         setupEmptyView()
 
         let sidebarWidthConstraint = sidebarView.widthAnchor.constraint(equalToConstant: 210)
@@ -991,6 +1001,53 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         )
     }
 
+    /// jq path 浮动 chip：与 selectionActionButton（path:line）成组布局（见
+    /// positionSelectionActionButton），仅在 currentJSONPath() 非 nil（当前是 JSON/JSONL
+    /// 且结构解析成功）时参与显示。点击复制 jq 表达式，⌥ 点击复制点分路径（copyJSONPath）。
+    private func setupJQPathChipButton() {
+        jqPathChipButton.title = "jq path"
+        if let symbolImage = NSImage(systemSymbolName: "curlybraces", accessibilityDescription: "Copy jq path") {
+            jqPathChipButton.image = symbolImage
+        }
+        jqPathChipButton.imagePosition = .imageLeading
+        jqPathChipButton.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        jqPathChipButton.contentTintColor = .white
+        // AttributedTitle 明确白字，避免 NSButton 在 borderless + 深色背景下沿用系统灰。
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor.white,
+            .font: NSFont.systemFont(ofSize: 12, weight: .medium)
+        ]
+        jqPathChipButton.attributedTitle = NSAttributedString(string: "jq path", attributes: attrs)
+        jqPathChipButton.isBordered = false
+        jqPathChipButton.wantsLayer = true
+        jqPathChipButton.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        jqPathChipButton.layer?.cornerRadius = 6
+        jqPathChipButton.shadow = NSShadow()
+        jqPathChipButton.layer?.shadowColor = NSColor.black.cgColor
+        jqPathChipButton.layer?.shadowOpacity = 0.18
+        jqPathChipButton.layer?.shadowOffset = CGSize(width: 0, height: -1)
+        jqPathChipButton.layer?.shadowRadius = 4
+        jqPathChipButton.layer?.masksToBounds = false
+        jqPathChipButton.target = self
+        jqPathChipButton.action = #selector(jqPathChipClicked(_:))
+        jqPathChipButton.translatesAutoresizingMaskIntoConstraints = false
+        jqPathChipButton.isHidden = true
+        jqPathChipButton.toolTip = "Click: jq path · ⌥Click: users.0.user.phone"
+
+        // 与 selectionActionButton 同层：加到 contentView 顶层，紧跟其后加入即可
+        // （两者从不重叠，相对 z-order 不影响观感）。
+        contentView.addSubview(jqPathChipButton, positioned: .above, relativeTo: nil)
+    }
+
+    /// 统一管理两个浮动 chip（jq path + path:line）的显隐：两者作为同一组同时出现/消失，
+    /// 防止"切到别的 tab 后 jq chip 还浮在屏幕上"这类半个 chip 残留。展示态的显隐（含
+    /// jq chip 是否参与）由 positionSelectionActionButton 按 currentJSONPath() 决定，
+    /// 不经过这里。
+    private func setSelectionChipsHidden(_ hidden: Bool) {
+        selectionActionButton.isHidden = hidden
+        jqPathChipButton.isHidden = hidden
+    }
+
     /// 选区变化 debounce 150ms 再评估显隐/定位，避免拖选过程中浮动按钮闪现。
     @objc private func selectionDidChange(_ notification: Notification) {
         selectionUpdateTimer?.invalidate()
@@ -1003,7 +1060,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// 窗口失活立即隐藏浮动按钮（不等 debounce）。
     @objc func windowDidResignKey(_ notification: Notification) {
-        selectionActionButton.isHidden = true
+        setSelectionChipsHidden(true)
     }
 
     /// 滚动时按钮跟随选区在屏上重新定位；仅在已显示时才需要重算，避免空跑。
@@ -1015,13 +1072,13 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// 计算选区首行边缘的浮动按钮位置（NSTextView 场景）；越界（贴工具栏/右缘）时反向就近校正。
     private func updateSelectionActionButton() {
         guard window?.isKeyWindow == true, activeTab != nil else {
-            selectionActionButton.isHidden = true
+            setSelectionChipsHidden(true)
             return
         }
 
         let range = textView.selectedRange()
         guard range.length > 0 else {
-            selectionActionButton.isHidden = true
+            setSelectionChipsHidden(true)
             return
         }
 
@@ -1029,13 +1086,13 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             let layoutManager = textView.layoutManager,
             let textContainer = textView.textContainer
         else {
-            selectionActionButton.isHidden = true
+            setSelectionChipsHidden(true)
             return
         }
 
         let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
         guard glyphRange.length > 0 else {
-            selectionActionButton.isHidden = true
+            setSelectionChipsHidden(true)
             return
         }
 
@@ -1064,7 +1121,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// 可直接构造矩形转换，无需额外翻转。
     private func updateSelectionActionButtonForWebView(x: Double, y: Double, width: Double, height: Double) {
         guard window?.isKeyWindow == true, isMarkdownWebActive else {
-            selectionActionButton.isHidden = true
+            setSelectionChipsHidden(true)
             return
         }
 
@@ -1076,34 +1133,69 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// NSTextView / markdown WebView 两条路径共用的浮动按钮几何：anchorRect 已转换到
     /// contentView（非 flipped，y 向上）坐标系——anchorRect.maxY 对应锚点视觉上边缘、
     /// .minY 对应视觉下边缘（与两条路径各自转换前的 flipped 源视图里 min/max 含义相反，
-    /// 由 convert(_:to:) 处理）。默认贴锚点上边缘上方 4pt；若越过 header 下边界（工具栏），
-    /// 反向落到锚点下边缘下方 4pt；最终两轴都收敛在 contentView.bounds 内。
+    /// 由 convert(_:to:) 处理）。两个 chip（jq path 左、path:line 右）作为**一组**定位：
+    /// 先各自 sizeToFit 求宽 → 组总宽整体右对齐 anchorRect.maxX、默认贴锚点上边缘上方
+    /// 4pt → 组整体做越界校正（越过 header 下边界翻到锚点下边缘下方，两轴 clamp 进
+    /// contentView.bounds）→ 再按组内偏移分配给两个按钮。currentJSONPath() 为 nil
+    /// （非 JSON / 结构解析失败 / map 未就绪）时 jq chip 不参与布局与显示，组退化为
+    /// 单个 path:line chip，位置与只有它自己时逐像素一致。
     private func positionSelectionActionButton(anchorRect: NSRect) {
+        // 根路径（空段数组，jq 表达式是 "."）不显示 chip：复制一个恒等表达式没有实际
+        // 价值，且状态栏对根路径同样不追加路径段（见 updateStatusBar），两者判据一致，
+        // 避免"chip 亮着但状态栏空着"。
+        let showJQChip = currentJSONPath()?.isEmpty == false
+        let spacing: CGFloat = 6
+        let chipHeight: CGFloat = 28
+
         selectionActionButton.sizeToFit()
-        var frame = selectionActionButton.frame
+        var pathLineFrame = selectionActionButton.frame
         // sizeToFit 只算 title + image 自身宽度，borderless 无内边距——手动加 16pt
         // 左右填充让 chip 视觉不挤，同时兜底最小宽度 108（放得下 icon + "path:line"）。
-        frame.size.width = max(frame.size.width + 16, 108)
-        frame.size.height = 28
-        frame.origin.x = anchorRect.maxX - frame.width
-        frame.origin.y = anchorRect.maxY + 4
+        pathLineFrame.size.width = max(pathLineFrame.size.width + 16, 108)
+        pathLineFrame.size.height = chipHeight
+
+        var jqFrame = NSRect.zero
+        if showJQChip {
+            jqPathChipButton.sizeToFit()
+            jqFrame = jqPathChipButton.frame
+            jqFrame.size.width = max(jqFrame.size.width + 16, 96)
+            jqFrame.size.height = chipHeight
+        }
+
+        let groupWidth = showJQChip ? jqFrame.width + spacing + pathLineFrame.width : pathLineFrame.width
+
+        var groupOrigin = NSPoint(x: anchorRect.maxX - groupWidth, y: anchorRect.maxY + 4)
 
         let clipBounds = contentView.bounds
         let headerBoundary = headerView.frame.minY - 4
-        if frame.origin.y + frame.height > headerBoundary {
-            frame.origin.y = anchorRect.minY - frame.height - 4
+        if groupOrigin.y + chipHeight > headerBoundary {
+            groupOrigin.y = anchorRect.minY - chipHeight - 4
         }
 
-        frame.origin.x = max(clipBounds.minX + 4, min(frame.origin.x, clipBounds.maxX - frame.width - 4))
-        frame.origin.y = max(clipBounds.minY + 4, min(frame.origin.y, clipBounds.maxY - frame.height - 4))
+        groupOrigin.x = max(clipBounds.minX + 4, min(groupOrigin.x, clipBounds.maxX - groupWidth - 4))
+        groupOrigin.y = max(clipBounds.minY + 4, min(groupOrigin.y, clipBounds.maxY - chipHeight - 4))
 
-        selectionActionButton.frame = frame
+        if showJQChip {
+            jqFrame.origin = NSPoint(x: groupOrigin.x, y: groupOrigin.y)
+            jqPathChipButton.frame = jqFrame
+            pathLineFrame.origin = NSPoint(x: groupOrigin.x + jqFrame.width + spacing, y: groupOrigin.y)
+        } else {
+            pathLineFrame.origin = groupOrigin
+        }
+
+        selectionActionButton.frame = pathLineFrame
         selectionActionButton.isHidden = false
+        jqPathChipButton.isHidden = !showJQChip
     }
 
     @objc private func selectionCopyPathLineClicked(_ sender: Any?) {
         copyPathLineReference()
-        selectionActionButton.isHidden = true
+        setSelectionChipsHidden(true)
+    }
+
+    @objc private func jqPathChipClicked(_ sender: Any?) {
+        copyJSONPath()
+        setSelectionChipsHidden(true)
     }
 
     /// 底部状态栏：左侧 Ln/Col/选中数，右侧文件 size；纯背景色块（非 vibrancy），色走
@@ -1253,7 +1345,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
 
         guard hasSelection else {
-            selectionActionButton.isHidden = true
+            setSelectionChipsHidden(true)
             webViewSelectionLine = nil
             return
         }
@@ -1496,7 +1588,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// 一键清空全部 tab：与单 tab 关闭同一收尾（rebuildTabList → 文件树跟随 → 重渲染），
     /// 清空后 activeTab 恒 nil，renderActiveTab() 自然落到 showEmptyState() 分支。
     @objc private func closeAllTabsClicked(_ sender: Any?) {
-        selectionActionButton.isHidden = true
+        setSelectionChipsHidden(true)
         tabs.removeAll()
         activeTabID = nil
 
@@ -1508,7 +1600,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func renderActiveTab() {
-        selectionActionButton.isHidden = true
+        setSelectionChipsHidden(true)
         invalidateHighlighting()
         clearFoldContext()
 
@@ -1564,7 +1656,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         if rendered.usesJSONHighlighting {
             activeJSONText = rendered.attributedText.string
             activeInvalidRanges = rendered.display.invalidRecordRanges
-            beginFoldContext(sourceText: rendered.attributedText.string, originalDisplay: rendered.display, tabID: tabID)
+            beginFoldContext(
+                sourceText: rendered.attributedText.string,
+                originalDisplay: rendered.display,
+                tabID: tabID,
+                buildsPathMap: rendered.jsonStructureIsValid
+            )
         }
         // 非 JSON 分支：activeJSONText/activeInvalidRanges/折叠上下文已由
         // renderActiveTab() 顶部的 clearFoldContext() 清空，此处无需重复置空。
@@ -1640,7 +1737,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private func showPlainText() {
         markdownWebView.isHidden = true
         isMarkdownWebActive = false
-        selectionActionButton.isHidden = true
+        setSelectionChipsHidden(true)
         webViewSelectionLine = nil
         scrollView.isHidden = false
     }
@@ -1654,7 +1751,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// markdown（≤8MB）→ WKWebView + 真 github-markdown-css 呈现。构建 HTML、载入、
     /// 重建大纲、填元信息；选中+复制由 WebView 原生自带。
     private func renderMarkdownWeb(document: LoadedText, targetLine: Int?) {
-        selectionActionButton.isHidden = true
+        setSelectionChipsHidden(true)
         webViewSelectionLine = nil
         isMarkdownWebActive = true
         modeControl.isHidden = true
@@ -1744,34 +1841,49 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// 合成态——gutter 从此带三角/跳号，正文带缩进导轨，像素上与之前完全一致
     /// （collapsed 为空时 compose 恒等）。tabID + foldRenderGeneration 双重代际校验，
     /// 防止 tab 切换/重新渲染后迟到的 build 结果覆盖新内容。
-    private func beginFoldContext(sourceText: String, originalDisplay: PreviewDisplayMetadata, tabID: UUID) {
+    ///
+    /// buildsPathMap（RenderedPreview.jsonStructureIsValid）为 true 时，在
+    /// JSONFoldMap.build **之后串行**（同一后台 block 内，不并发）构建 JSONPathMap——
+    /// 串行保证两者各自内部 `Array(prettyText.utf16)` 的瞬时内存峰值不叠加。为 false
+    /// 时（结构解析失败，sourceText 不保证是合法 pretty JSON）jsonPathMap 落地为 nil，
+    /// 不产生"推测路径"。落地后刷新 UI：updateStatusBar()/updateSelectionActionButton()
+    /// 让大文件打开后状态栏路径与 chip 立即出现，不必等用户先动一下光标
+    /// （render() 末尾的那次 updateStatusBar 发生在此后台 build 完成之前）。
+    private func beginFoldContext(sourceText: String, originalDisplay: PreviewDisplayMetadata, tabID: UUID, buildsPathMap: Bool) {
         foldSourceText = sourceText
         foldOriginalDisplay = originalDisplay
         collapsedFoldIDs = []
         foldMap = nil
         foldComposition = nil
+        jsonPathMap = nil
         foldRenderGeneration += 1
         let generation = foldRenderGeneration
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let builtMap = JSONFoldMap.build(prettyText: sourceText)
+            let builtPathMap = buildsPathMap ? JSONPathMap.build(prettyText: sourceText) : nil
             DispatchQueue.main.async {
                 guard let self else { return }
                 guard self.foldRenderGeneration == generation, self.activeTabID == tabID else { return }
                 self.foldMap = builtMap
+                self.jsonPathMap = builtPathMap
                 self.applyFoldState()
+                self.updateStatusBar()
+                self.updateSelectionActionButton()
             }
         }
     }
 
     /// 折叠上下文全清（含 activeJSONText/activeInvalidRanges，两者与 usesJSONHighlighting
     /// 门控一致）：非 JSON 模式下 gutter/正文均不带折叠注入面，可见区分色整体跳过，
-    /// 行为与改动前完全一致。
+    /// 行为与改动前完全一致。jsonPathMap 一并清空——本函数被 renderActiveTab() 在每次
+    /// 渲染开头无条件调用，漏清会导致切到非 JSON tab 后状态栏仍显示上一个 JSON 的路径。
     private func clearFoldContext() {
         foldSourceText = nil
         foldOriginalDisplay = nil
         foldMap = nil
         foldComposition = nil
+        jsonPathMap = nil
         collapsedFoldIDs = []
         foldRenderGeneration += 1
         activeJSONText = nil
@@ -2111,9 +2223,27 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         statusBarRightLabel.textColor = textColor
     }
 
-    /// 左侧 "Ln X, Col Y"（+ 选中时追加 "N characters selected"）+ 右侧 "size: X.XX KB/MB"；
-    /// 行列/选中数按源坐标：selectedRange（可见）经 sourceRange(forVisible:) 映射
-    /// （无折叠上下文时恒等）。
+    /// 当前光标/选区所在源行对应的 JSON 节点路径；jsonPathMap 为 nil（非 JSON、结构
+    /// 解析失败、或 build 尚未落地）时返回 nil。折叠态下 textView 的可见坐标先经
+    /// foldComposition 映射回源坐标（无折叠上下文时恒等），再用状态栏同款的源坐标
+    /// 行起点表 + 二分定位 0-based 行号查路径——光标落在折叠 chip 上时源坐标映射到
+    /// openLine，查出的路径正好是该容器自身，无需特判。
+    private func currentJSONPath() -> [JSONPathSegment]? {
+        guard let jsonPathMap else { return nil }
+
+        let visibleSelection = textView.selectedRange()
+        let sourceSelection = foldComposition.map {
+            JSONFoldComposer.sourceRange(forVisible: visibleSelection, in: $0)
+        } ?? visibleSelection
+
+        let lineIndex = lineStartIndex(for: sourceSelection.location, in: statusBarSourceLineStarts)
+        return jsonPathMap.path(line: lineIndex)
+    }
+
+    /// 左侧 "Ln X, Col Y"（+ 选中时追加 "N characters selected"，+ 当前 jq 路径）+
+    /// 右侧 "size: X.XX KB/MB"；行列/选中数按源坐标：selectedRange（可见）经
+    /// sourceRange(forVisible:) 映射（无折叠上下文时恒等）。路径为 nil 或为根（"."）时
+    /// 不追加；过长时中段省略（JSONPathMap.truncatedForDisplay）。
     private func updateStatusBar() {
         guard !statusBarView.isHidden else { return }
 
@@ -2131,6 +2261,11 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         var left = "Ln \(line), Col \(column)"
         if sourceSelection.length > 0 {
             left += "   \(sourceSelection.length) characters selected"
+        }
+
+        if let path = currentJSONPath(), !path.isEmpty {
+            let expression = JSONPathMap.jqExpression(path)
+            left += "   \(JSONPathMap.truncatedForDisplay(expression, limit: 60))"
         }
 
         statusBarLeftLabel.stringValue = left
@@ -2530,7 +2665,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         isMarkdownWebActive = false
         modeControl.isEnabled = false
         setActionButtonsEnabled(false)
-        selectionActionButton.isHidden = true
+        setSelectionChipsHidden(true)
         webViewSelectionLine = nil
         metaLabel.stringValue = ""
         textView.textStorage?.setAttributedString(NSAttributedString(string: ""))
@@ -2736,6 +2871,18 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         let line = isMarkdownWebActive ? (webViewSelectionLine ?? 1) : currentReferenceLine()
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString("\(url.path):\(line)", forType: .string)
+    }
+
+    /// jq path chip 点击复制：默认写入 jq 表达式（可直接 `jq '<粘贴>' file.json` 执行），
+    /// ⌥ 点击写入点分形态（`users.0.user.phone`）。currentJSONPath() 为 nil（非 JSON /
+    /// 结构解析失败 / map 未就绪）时静默不作为。
+    func copyJSONPath() {
+        guard let path = currentJSONPath(), !path.isEmpty else { return }
+        let expression = NSEvent.modifierFlags.contains(.option)
+            ? JSONPathMap.dotPath(path)
+            : JSONPathMap.jqExpression(path)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(expression, forType: .string)
     }
 
     private func relativePath(of url: URL, root: URL) -> String {
