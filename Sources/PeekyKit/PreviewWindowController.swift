@@ -465,7 +465,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         for request in requests {
             let standardizedURL = request.url.standardizedFileURL
 
-            if standardizedURL.hasDirectoryPath {
+            if isDirectoryOnDisk(standardizedURL) {
                 // 目录请求不产生内容 tab，仅设置/切换树根（TextFileLoader 拒目录的行为保留）。
                 establishTreeRoot(for: standardizedURL)
                 continue
@@ -1403,7 +1403,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// 根已存在且 target 仍在根内 → 不重建，只 revealAndSelect；target 在根外 → 重算根并 reload。
     private func establishTreeRoot(for target: URL) {
         let standardizedTarget = target.standardizedFileURL
-        let targetIsDirectory = standardizedTarget.hasDirectoryPath
+        let targetIsDirectory = isDirectoryOnDisk(standardizedTarget)
 
         if let currentRoot = treeRootURL, isURL(standardizedTarget, containedIn: currentRoot) {
             if !targetIsDirectory {
@@ -1421,6 +1421,17 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         if !targetIsDirectory {
             fileTreeView.revealAndSelect(fileURL: standardizedTarget)
         }
+    }
+
+    /// 目录判定跟随 symlink：URL 的 `hasDirectoryPath` 只看路径串、`.isDirectoryKey` 是 lstat
+    /// 语义，两者都会把指向目录的 symlink 当成文件送进 TextFileLoader。路径不存在时退回
+    /// 路径串判定，保持"以斜杠结尾即目录"的旧行为。
+    private func isDirectoryOnDisk(_ url: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
+            return isDirectory.boolValue
+        }
+        return url.hasDirectoryPath
     }
 
     private func isURL(_ url: URL, containedIn root: URL) -> Bool {
