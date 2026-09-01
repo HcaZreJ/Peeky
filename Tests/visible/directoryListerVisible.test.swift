@@ -35,6 +35,14 @@ private func makeFile(_ dir: URL, _ name: String, contents: String = "marker") t
     return url
 }
 
+/// Creates a symbolic link named `name` inside `dir` pointing at `target`.
+@discardableResult
+private func makeSymlink(_ dir: URL, _ name: String, target: URL) throws -> URL {
+    let url = dir.appendingPathComponent(name)
+    try FileManager.default.createSymbolicLink(at: url, withDestinationURL: target)
+    return url
+}
+
 @Suite("Visible_directoryLister")
 struct Visible_directoryLister {
     @Test("directories sort before files, each group ordered case-insensitively by name")
@@ -72,5 +80,39 @@ struct Visible_directoryLister {
         let entries = try DirectoryLister.list(dir: root)
 
         #expect(entries.isEmpty)
+    }
+
+    // MARK: symlink 目录
+
+    @Test("listing a directory reached through a symlink yields the target's children")
+    func listingSymlinkedDirectoryYieldsTargetChildren() throws {
+        let root = try makeFixtureRoot()
+        defer { removeFixture(root) }
+        let real = try makeDir(root, "realdir")
+        try makeFile(real, "SKILL.md", contents: "# hi")
+        let link = try makeSymlink(root, "linkToDir", target: real)
+
+        let entries = try DirectoryLister.list(dir: link)
+
+        #expect(entries.map(\.name) == ["SKILL.md"])
+    }
+
+    @Test("a symlinked subdirectory can be listed again through the url reported for it")
+    func symlinkedSubdirectoryURLCanBeListed() throws {
+        let root = try makeFixtureRoot()
+        defer { removeFixture(root) }
+        let outside = try makeDir(root, "outside")
+        let real = try makeDir(outside, "realdir")
+        try makeFile(real, "note.txt")
+        let holder = try makeDir(root, "holder")
+        _ = try makeSymlink(holder, "linkToDir", target: real)
+
+        let holderEntries = try DirectoryLister.list(dir: holder)
+        let linkEntry = try #require(holderEntries.first { $0.name == "linkToDir" })
+        #expect(linkEntry.isDirectory == true)
+
+        let childEntries = try DirectoryLister.list(dir: linkEntry.url)
+
+        #expect(childEntries.map(\.name) == ["note.txt"])
     }
 }

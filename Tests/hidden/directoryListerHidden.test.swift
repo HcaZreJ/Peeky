@@ -287,4 +287,79 @@ struct Hidden_directoryLister {
         #expect(entries.first { $0.name == "delta.txt" }?.size == 2)
         #expect(entries.first { $0.name == "alpha" }?.size == 0)
     }
+
+    // MARK: symlink 目录作为列举对象
+
+    @Test("listing a directory reached through a symlink yields the target's children")
+    func listingSymlinkedDirectoryYieldsTargetChildren() throws {
+        let root = try makeFixtureRoot()
+        defer { removeFixture(root) }
+        let real = try makeDir(root, "realdir")
+        try makeFile(real, "SKILL.md", contents: "# hi")
+        _ = try makeDir(real, "sub")
+        let link = try makeSymlink(root, "linkToDir", target: real)
+
+        let entries = try DirectoryLister.list(dir: link)
+
+        #expect(entries.map(\.name) == ["sub", "SKILL.md"])
+    }
+
+    @Test("listing through a relative symlink whose target sits outside the link's own parent works")
+    func listingRelativeSymlinkAcrossDirectoriesWorks() throws {
+        let root = try makeFixtureRoot()
+        defer { removeFixture(root) }
+        let real = try makeDir(root, "realdir")
+        try makeFile(real, "note.txt")
+        let holder = try makeDir(root, "holder")
+        // 相对目标（`../realdir`）——真实场景里 ~/.claude/skills/<name> -> ../../.agents/skills/<name>
+        try FileManager.default.createSymbolicLink(
+            atPath: holder.appendingPathComponent("linkToDir").path,
+            withDestinationPath: "../realdir"
+        )
+
+        let entries = try DirectoryLister.list(dir: holder.appendingPathComponent("linkToDir"))
+
+        #expect(entries.map(\.name) == ["note.txt"])
+    }
+
+    @Test("a symlinked subdirectory can be listed again through the url reported for it")
+    func symlinkedSubdirectoryURLCanBeListed() throws {
+        let root = try makeFixtureRoot()
+        defer { removeFixture(root) }
+        let outside = try makeDir(root, "outside")
+        let real = try makeDir(outside, "realdir")
+        try makeFile(real, "note.txt")
+        let holder = try makeDir(root, "holder")
+        _ = try makeSymlink(holder, "linkToDir", target: real)
+
+        let holderEntries = try DirectoryLister.list(dir: holder)
+        let linkEntry = try #require(holderEntries.first { $0.name == "linkToDir" })
+
+        let childEntries = try DirectoryLister.list(dir: linkEntry.url)
+
+        #expect(childEntries.map(\.name) == ["note.txt"])
+    }
+
+    @Test("a symlink pointing at a regular file throws when listed as a directory")
+    func symlinkToFileAsDirectoryThrows() throws {
+        let root = try makeFixtureRoot()
+        defer { removeFixture(root) }
+        let file = try makeFile(root, "plain.txt")
+        let link = try makeSymlink(root, "linkToFile", target: file)
+
+        #expect(throws: (any Error).self) {
+            try DirectoryLister.list(dir: link)
+        }
+    }
+
+    @Test("a broken symlink throws when listed as a directory")
+    func brokenSymlinkAsDirectoryThrows() throws {
+        let root = try makeFixtureRoot()
+        defer { removeFixture(root) }
+        let link = try makeSymlink(root, "dangling", target: root.appendingPathComponent("gone", isDirectory: true))
+
+        #expect(throws: (any Error).self) {
+            try DirectoryLister.list(dir: link)
+        }
+    }
 }

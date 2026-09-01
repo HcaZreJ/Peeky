@@ -27,21 +27,25 @@ public enum DirectoryLister {
     /// - 过滤：名为 `.git` / `.hg` / `.svn` / `.DS_Store` 的条目一律不出现；
     ///   其余条目（含其它 dotfile、node_modules）均出现。
     /// - symlink 条目按解析目标判定 isDirectory，不递归展开。
-    /// - dir 不存在 / 不是目录 / 不可读 → throws。
+    /// - dir 自身是指向目录的 symlink（如 `~/.claude/skills/<name>` → `~/.agents/skills/<name>`）
+    ///   时列举其目标的子项。
+    /// - dir 不存在 / 解析后不是目录 / 不可读 → throws。
     public static func list(dir: URL) throws -> [DirEntry] {
         let fm = FileManager.default
         let excludedNames: Set<String> = [".git", ".hg", ".svn", ".DS_Store"]
 
-        let contents = try fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [])
+        // URL 版 contentsOfDirectory(at:) 以 lstat 语义判定 dir，dir 自身是指向目录的
+        // symlink 时直接抛 ENOTDIR；路径版跟随 symlink，与"symlink 目录可展开"一致。
+        let names = try fm.contentsOfDirectory(atPath: dir.path)
 
         var entries: [DirEntry] = []
-        entries.reserveCapacity(contents.count)
+        entries.reserveCapacity(names.count)
 
-        for url in contents {
-            let name = url.lastPathComponent
+        for name in names {
             if excludedNames.contains(name) {
                 continue
             }
+            let url = dir.appendingPathComponent(name)
 
             let ownValues = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey])
             let mtime = ownValues.contentModificationDate ?? Date()
