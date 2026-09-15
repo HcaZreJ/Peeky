@@ -85,6 +85,7 @@ brew upgrade --cask peeky
   展开五层目录后按 ⌘R，树保持原来的展开层级与选中行。
   当前正在预览的文件被外部改写时，正文就地更新且停在原来的滚动位置（markdown 与非 markdown 两条路径都要看）；
   切到另一个 tab 再切回来，期间被改写的内容在切回的那一刻落地。无树根（空窗口）时 View 菜单的 Refresh from Disk 置灰。
+- 顶栏按钮逐个 hover：出浅底并浮出 tooltip，浅色深色下浅底都看得见；打开非 repo 内的文件时「复制相对路径」明显变暗。tab 卡片上的 × 与 Close All 同样有浅底。
 - `<py / ts / yaml …>` 打开后应显示 Dark Modern 主题高亮，深色背景统一；选中 ⌘C 可复制；⌘E 打开系统默认编辑器并跳到当前行。
 - `.app` bundle 打包后，执行 `open "peeky://open?path=...&line=N"` 应打开正式版 Peeky 并定位到指定行；`open "peeky-dev://open?path=...&line=N"` 应打开本地 dev 版。
 - 大文件的行为：非 JSON / JSONL 且大于 8 MB 时降级为 raw，不阻塞界面；JSON / JSONL 仍然进行缩进格式化 + 可视区惰性高亮，即使大文件也不阻塞。
