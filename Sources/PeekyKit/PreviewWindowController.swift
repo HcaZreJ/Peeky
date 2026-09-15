@@ -889,7 +889,6 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         titleStack.alignment = .leading
         titleStack.spacing = 1
         titleStack.translatesAutoresizingMaskIntoConstraints = false
-        titleStack.setHuggingPriority(.defaultLow, for: .horizontal)
 
         modeControl.target = self
         modeControl.action = #selector(modeChanged(_:))
@@ -941,24 +940,39 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         controls.spacing = 20
         controls.translatesAutoresizingMaskIntoConstraints = false
 
-        let headerStack = NSStackView(views: [titleStack, controls])
-        headerStack.orientation = .horizontal
-        headerStack.alignment = .centerY
-        headerStack.spacing = 12
-        headerStack.translatesAutoresizingMaskIntoConstraints = false
-        headerView.addSubview(headerStack)
+        // 标题钉左、控件组钉右，中间只留一条「至少 12」的空隙：窗口变宽时富余宽度整段落进
+        // 这条空隙。控件组一律不吸收富余宽度——它们的间距是编码分组关系的（组内 8 / 两小组 12 /
+        // 两大组 20），被拉开就读成了别的分组。标题是唯一可压缩的一侧，过长时中段省略。
+        for group in [copyGroup, locationGroup, actionGroup, viewModeGroup, controls] {
+            group.setHuggingPriority(.required, for: .horizontal)
+            group.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
+        titleStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        headerView.addSubview(titleStack)
+        headerView.addSubview(controls)
 
         NSLayoutConstraint.activate([
-            headerStack.leadingAnchor.constraint(equalTo: headerView.leadingAnchor, constant: 14),
-            headerStack.trailingAnchor.constraint(equalTo: headerView.trailingAnchor, constant: -14),
-            headerStack.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
+            titleStack.leadingAnchor.constraint(equalTo: headerView.leadingAnchor, constant: 14),
+            titleStack.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
+
+            controls.leadingAnchor.constraint(greaterThanOrEqualTo: titleStack.trailingAnchor, constant: 12),
+            controls.trailingAnchor.constraint(equalTo: headerView.trailingAnchor, constant: -14),
+            controls.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
 
             copyContentButton.widthAnchor.constraint(equalToConstant: 30),
             copyNameButton.widthAnchor.constraint(equalToConstant: 30),
             copyAbsPathButton.widthAnchor.constraint(equalToConstant: 30),
             copyRelPathButton.widthAnchor.constraint(equalToConstant: 30),
             revealButton.widthAnchor.constraint(equalToConstant: 30),
-            overflowButton.widthAnchor.constraint(equalToConstant: 30)
+            overflowButton.widthAnchor.constraint(equalToConstant: 30),
+
+            copyContentButton.heightAnchor.constraint(equalToConstant: 24),
+            copyNameButton.heightAnchor.constraint(equalToConstant: 24),
+            copyAbsPathButton.heightAnchor.constraint(equalToConstant: 24),
+            copyRelPathButton.heightAnchor.constraint(equalToConstant: 24),
+            revealButton.heightAnchor.constraint(equalToConstant: 24),
+            overflowButton.heightAnchor.constraint(equalToConstant: 24)
         ])
     }
 
