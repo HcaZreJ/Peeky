@@ -4,7 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
-swift build -c release
+# 只构建 app 产物。不带 --product 时 swiftbuild 会把 PeekyTests 一起构建，并在这个组合下
+# 漏传 Testing 的宏插件（见 DEVFLOW），release 构建因此失败——而打包本来就不需要测试 target。
+swift build -c release --product Peeky
 
 APP_DIR="$ROOT_DIR/.build/Peeky.app"
 rm -rf "$APP_DIR"
