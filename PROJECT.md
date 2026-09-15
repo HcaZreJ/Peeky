@@ -28,6 +28,7 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 - `LoadedText { text, encoding, isTruncated, kind }`：`TextFileLoader` 的读取产物
 - `FileKind`：markdown / json / jsonl / yaml / xml / plist / csv / log / text
 - `PreviewTab { url, document, mode, targetLine, targetColumn }`：窗口内 tab 状态
+- `FileTreeNode { url, name, isDirectory, isErrorPlaceholder, childrenLoaded, children }`：文件树节点。`reconcile(existing:entries:)` 把磁盘最新一级列表对账进已缓存的子项——次序跟随 `entries`，URL 未变的条目复用原节点实例（`NSOutlineView` 按实例记展开态，换实例会把展开的子树折回去），新 URL 建新节点，磁盘上消失的丢弃
 - `RenderedPreview { attributedText, note, outline, display, highlightLanguage?, usesJSONHighlighting, followsSystemAppearance, jsonStructureIsValid }`：`PreviewRenderer` 的输出。`highlightLanguage` 非 nil 表示走 shiki 高亮（Dark Modern）；`usesJSONHighlighting` 为 true 表示 JSON / JSONL 走可视区惰性词法高亮；`followsSystemAppearance` 为 true 表示编辑器区通过 `PeekyTheme` 跟随系统明暗；`jsonStructureIsValid` 为 true 表示源文本是结构解析成功的 JSON，控制器据此决定是否建立 `JSONPathMap` 路径索引
 - `PeekyTheme`：两套语义 palette（浅色 GitHub Light、深色 VS Code Dark Modern），`ThemeColor` 枚举 × hex 常量表，换色只改常量；`resolveAppearance(NSAppearance?)` 将系统外观映射到对应 palette
 - `JSONHighlighter.JSONToken { kind, range }`（kind ∈ key / string / number / boolLiteral / nullLiteral / punctuation）：JSON 词法分析器，单遍扫描按 UTF-16 子范围 tokenize，为可视区惰性高亮提供 token
@@ -41,6 +42,7 @@ main → AppDelegate → { OpenRequest, PreviewWindowController }
 PreviewWindowController(约 1.8k 行,唯一持有状态的 UI 控制器)
   → TextFileLoader / PreviewRenderer / MarkdownHTMLRenderer / MarkdownLinkPolicy / PreviewDisplayMetadata / HighlightService
   → WKWebView(Markdown 预览) / PreviewGutterView(NSRulerView) / FileTreeView / Drop*View / FileKind / PeekyTheme / JSONHighlighter
+FileTreeView(NSOutlineView 惰性树) → FileTreeNode(节点 + reconcile) / DirectoryLister
 MarkdownHTMLRenderer(Markdown → HTML,交给 WebView);PreviewRenderer(非 Markdown 的路径选择与编排)
   → JSONFormatter / XMLFormatter / SyntaxHighlighter / MarkdownRenderer(大纲抽取 + 超 8 MB 时的兜底) / FileKind
 叶子纯函数模块:JSONFormatter · JSONHighlighter · JSONPathMap(逐行节点路径索引 + jq/点分序列化) · PeekyTheme · MarkdownHTMLRenderer · MarkdownLinkPolicy(链接点击导航分流) · XMLFormatter · MarkdownRenderer · SyntaxHighlighter · RepoRoot · DirectoryLister
@@ -53,5 +55,6 @@ MarkdownHTMLRenderer(Markdown → HTML,交给 WebView);PreviewRenderer(非 Markd
 - 配色集中在 `PeekyTheme`，两套语义 palette（浅色 GitHub Light、深色 VS Code Dark Modern），换色只改 hex 常量，跟随系统明暗；已覆盖 JSON / JSONL 渲染区和 gutter，侧栏 / 源码 / Markdown 的主题统一仍在后续。
 - Markdown 解析层用 `swiftlang/swift-markdown` `exact 0.8.0`，是本 repo 唯一的第三方 SPM 依赖。
 - 高亮引擎是 JavaScriptCore + shiki（`dark_modern` include 链在构建期扁平化）。产物 `Sources/PeekyKit/Resources/shiki-bundle.js` 由 esbuild 打包并 checked-in；运行期不需要 Node，高亮引擎本身不依赖 WebKit（Markdown 预览另外使用 WKWebView）。
+- 文件树的任何一次「与磁盘对账」都走 `FileTreeNode.reconcile`，复用 URL 未变的节点实例，展开态与选中行因此天然保住；`FileTreeView.reload(root:)` 只用于换树根。
 - 编辑功能超出范围（见 `.out-of-scope/file-editing.md`）；⌘E 用系统默认编辑器打开当前文件。
 - CLI 命令名 `peek`，app 与 repo 名沿用 Peeky；基线是 `main` 分支。
