@@ -899,14 +899,15 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         // 6 个动作各自一个图标加一行文字。"复制路径 / 复制相对路径 / 复制文件名"这三个动作在
         // SF Symbols、Codicons、Material、Lucide 里都没有约定符号，VS Code 对它们用的是纯文字
-        // 菜单项——含义由文字承担，图标只提供形状差异帮助定位。复制动作统一用 doc.on.doc：
-        // Apple 给它标的关键词是 copy，doc.on.clipboard 标的是 paste。
+        // 菜单项——含义由文字承担，图标只提供形状差异帮助定位。复制内容用 doc.on.doc：Apple 给它标的
+        // 关键词是 copy，doc.on.clipboard 标的是 paste。六个符号的宽高比都在 1.6 以内——墨迹
+        // 归一到同一高度之后横向才不会撑出画布，宽高比 2:1 的字母组与 4:1 的标点不进这排。
         configureIconButton(copyContentButton, symbol: "doc.on.doc", caption: "Content", tooltip: "Copy File Content (⌥⌘C)", action: #selector(copyContentClicked(_:)))
-        configureIconButton(copyNameButton, symbol: "textformat.abc", caption: "Name", tooltip: "Copy File Name", action: #selector(copyNameClicked(_:)))
+        configureIconButton(copyNameButton, symbol: "tag", caption: "Name", tooltip: "Copy File Name", action: #selector(copyNameClicked(_:)))
         configureIconButton(copyAbsPathButton, symbol: "internaldrive", caption: "Full path", tooltip: "Copy Absolute Path (⇧⌘C)", action: #selector(copyAbsPathClicked(_:)))
         configureIconButton(copyRelPathButton, symbol: "list.bullet.indent", caption: "Rel path", tooltip: "Copy Relative Path (⇧⌥⌘C)", action: #selector(copyRelPathClicked(_:)))
         configureIconButton(revealButton, symbol: "folder", caption: "Finder", tooltip: "Reveal in Finder", action: #selector(revealInFinder(_:)))
-        configureIconButton(overflowButton, symbol: "ellipsis", caption: "More", tooltip: "View Options", action: #selector(showOverflowMenu(_:)))
+        configureIconButton(overflowButton, symbol: "ellipsis.circle", caption: "More", tooltip: "View Options", action: #selector(showOverflowMenu(_:)))
         configureOverflowMenu()
 
         // copyGroup（4 个文件级复制动作）与 locationGroup（Reveal / overflow：定位与

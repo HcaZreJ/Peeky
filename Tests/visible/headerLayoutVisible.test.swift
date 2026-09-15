@@ -43,6 +43,42 @@ private func headerButtons(_ window: NSWindow) -> [(button: NSButton, frame: NSR
     }
 }
 
+/// 量一张模板图里**墨迹**的高度（不是 image.size——那里面含留白）。超采样 4 倍再扫 alpha，
+/// 描边末端是亚像素的，按 1 倍扫会把末端算丢。
+@MainActor
+private func inkHeight(of image: NSImage) -> CGFloat? {
+    let sample: CGFloat = 4
+    let wide = Int((image.size.width * sample).rounded(.up))
+    let high = Int((image.size.height * sample).rounded(.up))
+    guard
+        wide > 0, high > 0,
+        let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: wide, pixelsHigh: high,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ),
+        let context = NSGraphicsContext(bitmapImageRep: rep)
+    else {
+        return nil
+    }
+
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = context
+    NSColor.black.setFill()
+    image.draw(in: NSRect(origin: .zero, size: NSSize(width: wide, height: high)))
+    NSGraphicsContext.restoreGraphicsState()
+
+    var top = high, bottom = -1
+    for row in 0..<high {
+        for column in 0..<wide where (rep.colorAt(x: column, y: row)?.alphaComponent ?? 0) > 0.08 {
+            top = min(top, row)
+            bottom = max(bottom, row)
+        }
+    }
+    guard bottom >= 0 else { return nil }
+    return CGFloat(bottom - top + 1) / sample
+}
+
 @Suite("Visible_headerLayout")
 @MainActor
 struct Visible_headerLayout {
@@ -82,10 +118,28 @@ struct Visible_headerLayout {
         // "Full path" 比 "Name" 长，按钮也跟着宽
         #expect(frames[2].width > frames[1].width)
 
-        // 六颗的图标画布同尺寸：SF Symbol 自然高度不一（doc.on.doc 18、ellipsis 5），
-        // imageAbove 把「图标 + 文字」整块居中，画布不统一时文字会落在六个高度上
+        // 六颗的图标画布同尺寸：画布不统一时 imageAbove 会把文字推到六个不同高度
         let boxes = Set(headerButtons(window).map { "\($0.button.image?.size ?? .zero)" })
         #expect(boxes.count == 1)
+    }
+
+    @Test("六颗图标的墨迹等高，落在同一条水平带上")
+    func iconInkSharesOneHeight() throws {
+        let (_, window) = try makeLoadedController()
+        let buttons = headerButtons(window).map(\.button)
+        #expect(buttons.count == 6)
+
+        // SF Symbol 是按坐在文字基线上设计的，墨高天生差得很远（13pt 下 doc.on.doc 16、
+        // folder 12、ellipsis 只有 3）。ToolbarSymbol 把墨迹缩放到同一高度再摆进画布，
+        // 这条断言守住那个结果——换图标时墨高一旦重新散开，这里就会红。
+        var heights: [CGFloat] = []
+        for button in buttons {
+            let image = try #require(button.image, "\(button.toolTip ?? "?") 没有图标")
+            heights.append(try #require(inkHeight(of: image), "\(button.toolTip ?? "?") 图标是空的"))
+        }
+        let spread = (heights.max() ?? 0) - (heights.min() ?? 0)
+        #expect(spread <= 1.0, "六颗图标墨高极差 \(spread)pt，超过 1pt 就肉眼可见")
+        #expect(heights.allSatisfy { $0 >= ToolbarSymbol.inkHeight - 1 })
     }
 
     @Test("6 个按钮各自带图标、文字与 tooltip，点击落在自己身上")
