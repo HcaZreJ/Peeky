@@ -82,7 +82,7 @@ struct Hidden_peekyTheme {
             (hex: "#FFFFFF", red: 1.0, green: 1.0, blue: 1.0),
             (hex: "#1F1F1F", red: 31.0 / 255.0, green: 31.0 / 255.0, blue: 31.0 / 255.0),
             (hex: "#0A5FD3", red: 10.0 / 255.0, green: 95.0 / 255.0, blue: 211.0 / 255.0),
-        ]
+        ] as [(hex: String, red: Double, green: Double, blue: Double)]
     )
     func hexColorParsesSixDigitHexVariousColors(_ testCase: (hex: String, red: Double, green: Double, blue: Double)) throws {
         let color = try #require(PeekyTheme.hexColor(testCase.hex))
@@ -106,7 +106,7 @@ struct Hidden_peekyTheme {
             (hex: "#000000FF", red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0),
             (hex: "#FFFFFF00", red: 1.0, green: 1.0, blue: 1.0, alpha: 0.0),
             (hex: "#1F1F1F80", red: 31.0 / 255.0, green: 31.0 / 255.0, blue: 31.0 / 255.0, alpha: 128.0 / 255.0),
-        ]
+        ] as [(hex: String, red: Double, green: Double, blue: Double, alpha: Double)]
     )
     func hexColorParsesEightDigitHexWithVariousAlpha(_ testCase: (hex: String, red: Double, green: Double, blue: Double, alpha: Double)) throws {
         let color = try #require(PeekyTheme.hexColor(testCase.hex))

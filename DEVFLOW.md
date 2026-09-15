@@ -3,12 +3,12 @@
 ## 常用命令
 | 命令 | 作用 |
 |---|---|
-| `swift build` | 增量 debug 构建 |
+| `swift build --product Peeky` | 增量 debug 构建 |
 | `swift build -c release` | release 构建（全量 ~40s） |
 | `swift run Peeky <path>` | 从源码直接运行（无 Finder 集成） |
 | `swift run Peeky <path>:<line>` | 打开并跳到指定行 |
 | `bash scripts/build-app.sh` | 组装 `.build/Peeky.app` + ad-hoc codesign（正式身份，供 CI 打包）；`--install` 装到 `~/Applications/Peeky Dev.app`，转成 dev 身份（`local.peeky.dev` / `peeky-dev://` / 独立 Preferences），symlink `~/.local/bin/peek` |
-| `swift build --product PeekyTests && ./.build/debug/PeekyTests` | 运行全部测试（可加 `--filter <suite>`） |
+| `swift build --product PeekyTests && ./.build/out/Products/Debug/PeekyTests` | 运行全部测试（可加 `--filter <suite>`） |
 | `scripts/run-hidden-tests.sh <unit>` | 运行该单元的 hidden 测试，仅输出 `PASSED: X/Y` |
 | `node scripts/build-shiki-bundle.mjs` | 重新生成 `Sources/PeekyKit/Resources/shiki-bundle.js`（幂等；改语言或主题后运行） |
 | `node scripts/shiki-bundle/smoke.mjs` | bundle 冒烟测试：3 种语言 tokenize + dark_modern 配色 + 分块续接断言 |
@@ -16,6 +16,18 @@
 | `git tag vX.Y.Z && git push origin vX.Y.Z` | 发布：触发 CI 构建 + GitHub Release + 更新 Homebrew cask（见「发布」） |
 
 > 本机仅 CommandLineTools：`swift test` 会构建但**不会执行**（CLT 缺 xctest 执行器）；请使用上表的 PeekyTests 可执行文件运行测试。
+>
+> **每条 swift build 都带 `--product`。** Swift 6.2 起 SwiftPM 默认走 swiftbuild 构建系统；一次同时构建
+> `Peeky` 与 `PeekyTests` 两个 target 时，它会漏传 Testing 的宏插件，报
+> `external macro implementation type 'TestingMacros.SuiteDeclarationMacro' could not be found`。
+> 带 `--product` 逐个构建即正常。同一条命令偶发这个错时重跑一次即可通过。
+>
+> swiftbuild 把产物放在 `.build/out/Products/{Debug,Release}`，并保留 `.build/release/Peeky` 兼容路径供
+> `scripts/build-app.sh` 使用。`scripts/run-hidden-tests.sh` 自行在两处候选里挑实际存在的那个二进制。
+>
+> **参数化测试的 `arguments:` 数组一律带显式类型标注**（`] as [(hex: String, red: Double, …)]`）。
+> 缺标注时 Swift 6.4 推导 `@Test` 宏展开里的元组数组会超时，报
+> `the compiler is unable to type-check this expression in reasonable time`，整个测试 target 编不过。
 
 ## 测试策略（Test-First，双层）
 - 叶子纯函数模块：`Tests/visible/` + `Tests/hidden/`（Swift Testing；suite 命名 `Visible_<unit>` / `Hidden_<unit>` 供 `--filter` 精确匹配；同 target 内文件 basename 必须唯一，命名 `<unit>Visible.test.swift` / `<unit>Hidden.test.swift`）。
@@ -32,7 +44,7 @@
 唯一的 workflow 是 `.github/workflows/build-app.yml`，触发条件只有两个：push 一个 `v*` tag，
 或在 Actions 页手动 `workflow_dispatch`（可指定任意 branch / tag / SHA 构建）。
 **合并到 `main` 不触发任何 CI，也不产出新版本**；仓库没有自动化测试闸门，测试闸门是本地的
-`swift build --product PeekyTests && ./.build/debug/PeekyTests`。
+`swift build --product PeekyTests && ./.build/out/Products/Debug/PeekyTests`。
 
 发一个版本：
 
