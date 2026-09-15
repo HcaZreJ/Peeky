@@ -29,8 +29,9 @@ private func headerButtons(_ window: NSWindow) -> [(button: NSButton, frame: NSR
     }
     walk(content)
 
-    let headerTitles = ["Copy File Content", "Copy File Name", "Copy Absolute Path",
-                        "Copy Relative Path", "Reveal in Finder", "More"]
+    let headerTitles = ["Copy File Content (⌥⌘C)", "Copy File Name",
+                        "Copy Absolute Path (⇧⌘C)", "Copy Relative Path (⇧⌥⌘C)",
+                        "Reveal in Finder", "View Options"]
     return headerTitles.compactMap { title in
         guard
             let button = found.first(where: { $0.toolTip == title }),
@@ -67,25 +68,31 @@ struct Visible_headerLayout {
         #expect(abs(frames[5].minX - frames[4].maxX - 8) < 0.6)
     }
 
-    @Test("6 个按钮等高等宽、上缘齐平，悬停底不会参差")
+    @Test("6 个按钮等高、上缘齐平，宽度各自容下自己那行文字")
     func iconButtonsShareOneBaseline() throws {
         let (_, window) = try makeLoadedController()
         let frames = headerButtons(window).map(\.frame)
         #expect(frames.count == 6)
         guard let first = frames.first else { return }
 
-        #expect(frames.allSatisfy { abs($0.width - 30) < 0.01 })
-        #expect(frames.allSatisfy { abs($0.height - 24) < 0.01 })
+        #expect(frames.allSatisfy { abs($0.height - 36) < 0.01 })
         #expect(frames.allSatisfy { abs($0.minY - first.minY) < 0.01 })
+        // 宽度随文字长度变化，下限 34（左右各 6pt 内边距，悬停底不贴字）
+        #expect(frames.allSatisfy { $0.width >= 34 })
+        // "Full path" 比 "Name" 长，按钮也跟着宽
+        #expect(frames[2].width > frames[1].width)
     }
 
-    @Test("6 个按钮各自带 tooltip，点击落在自己身上")
+    @Test("6 个按钮各自带图标、文字与 tooltip，点击落在自己身上")
     func iconButtonsAreLabelledAndHittable() throws {
         let (_, window) = try makeLoadedController()
         let content = try #require(window.contentView)
 
         for (button, frame) in headerButtons(window) {
             #expect(button.toolTip?.isEmpty == false)
+            // 符号名写错时 NSImage(systemSymbolName:) 返回 nil，按钮只剩一行字
+            #expect(button.image != nil)
+            #expect(button.attributedTitle.length > 0)
             let hit = content.hitTest(NSPoint(x: frame.midX, y: frame.midY))
             #expect(hit === button || (hit?.isDescendant(of: button) ?? false))
         }
@@ -94,7 +101,7 @@ struct Visible_headerLayout {
     @Test("在 repo 内的文件，复制相对路径按钮可用")
     func copyRelativePathIsEnabledInsideARepository() throws {
         let (_, window) = try makeLoadedController()
-        let relative = headerButtons(window).first { $0.button.toolTip == "Copy Relative Path" }
+        let relative = headerButtons(window).first { $0.button.toolTip == "Copy Relative Path (⇧⌥⌘C)" }
         #expect(try #require(relative).button.isEnabled)
     }
 }

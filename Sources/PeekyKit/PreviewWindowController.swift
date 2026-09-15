@@ -34,6 +34,12 @@ final class HoverButton: NSButton {
         didSet { updateHoverAppearance() }
     }
 
+    /// 图标下方的 9pt 文字。字色跟 `contentTintColor` 同步——图标与文字是同一颗按钮的两个
+    /// 部件，不同步的话悬停时会出现「图标亮了字没亮」。
+    var caption: String? {
+        didSet { updateHoverAppearance() }
+    }
+
     override var isEnabled: Bool {
         didSet { updateHoverAppearance() }
     }
@@ -79,9 +85,22 @@ final class HoverButton: NSButton {
                 ? NSColor.labelColor.withAlphaComponent(Self.hoverAlpha).cgColor
                 : NSColor.clear.cgColor
         }
-        contentTintColor = isEnabled
+        let tint: NSColor = isEnabled
             ? (isHovering ? .labelColor : .secondaryLabelColor)
             : .tertiaryLabelColor
+        contentTintColor = tint
+
+        guard let caption else { return }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        attributedTitle = NSAttributedString(
+            string: caption,
+            attributes: [
+                .foregroundColor: tint,
+                .font: NSFont.systemFont(ofSize: 9, weight: .regular),
+                .paragraphStyle: paragraph
+            ]
+        )
     }
 }
 
@@ -878,14 +897,16 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         viewModeGroup.translatesAutoresizingMaskIntoConstraints = false
         viewModeGroup.addArrangedSubview(modeControl)
 
-        // 4 个独立文件级复制动作：各自图标编码"复制哪种信息"，点击即时生效，不再有
-        // "点了才发现是菜单"的隐喻错位（见 plan D8）。
-        configureIconButton(copyContentButton, symbol: "doc.on.clipboard", tooltip: "Copy File Content", action: #selector(copyContentClicked(_:)))
-        configureIconButton(copyNameButton, symbol: "character.textbox", tooltip: "Copy File Name", action: #selector(copyNameClicked(_:)))
-        configureIconButton(copyAbsPathButton, symbol: "link", tooltip: "Copy Absolute Path", action: #selector(copyAbsPathClicked(_:)))
-        configureIconButton(copyRelPathButton, symbol: "arrow.turn.up.right", tooltip: "Copy Relative Path", action: #selector(copyRelPathClicked(_:)))
-        configureIconButton(revealButton, symbol: "folder", tooltip: "Reveal in Finder", action: #selector(revealInFinder(_:)))
-        configureIconButton(overflowButton, symbol: "ellipsis.circle", tooltip: "More", action: #selector(showOverflowMenu(_:)))
+        // 6 个动作各自一个图标加一行文字。"复制路径 / 复制相对路径 / 复制文件名"这三个动作在
+        // SF Symbols、Codicons、Material、Lucide 里都没有约定符号，VS Code 对它们用的是纯文字
+        // 菜单项——含义由文字承担，图标只提供形状差异帮助定位。复制动作统一用 doc.on.doc：
+        // Apple 给它标的关键词是 copy，doc.on.clipboard 标的是 paste。
+        configureIconButton(copyContentButton, symbol: "doc.on.doc", caption: "Content", tooltip: "Copy File Content (⌥⌘C)", action: #selector(copyContentClicked(_:)))
+        configureIconButton(copyNameButton, symbol: "textformat.abc", caption: "Name", tooltip: "Copy File Name", action: #selector(copyNameClicked(_:)))
+        configureIconButton(copyAbsPathButton, symbol: "internaldrive", caption: "Full path", tooltip: "Copy Absolute Path (⇧⌘C)", action: #selector(copyAbsPathClicked(_:)))
+        configureIconButton(copyRelPathButton, symbol: "list.bullet.indent", caption: "Rel path", tooltip: "Copy Relative Path (⇧⌥⌘C)", action: #selector(copyRelPathClicked(_:)))
+        configureIconButton(revealButton, symbol: "folder", caption: "Finder", tooltip: "Reveal in Finder", action: #selector(revealInFinder(_:)))
+        configureIconButton(overflowButton, symbol: "ellipsis", caption: "More", tooltip: "View Options", action: #selector(showOverflowMenu(_:)))
         configureOverflowMenu()
 
         // copyGroup（4 个文件级复制动作）与 locationGroup（Reveal / overflow：定位与
@@ -934,21 +955,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
             controls.leadingAnchor.constraint(greaterThanOrEqualTo: titleStack.trailingAnchor, constant: 12),
             controls.trailingAnchor.constraint(equalTo: headerView.trailingAnchor, constant: -14),
-            controls.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
-
-            copyContentButton.widthAnchor.constraint(equalToConstant: 30),
-            copyNameButton.widthAnchor.constraint(equalToConstant: 30),
-            copyAbsPathButton.widthAnchor.constraint(equalToConstant: 30),
-            copyRelPathButton.widthAnchor.constraint(equalToConstant: 30),
-            revealButton.widthAnchor.constraint(equalToConstant: 30),
-            overflowButton.widthAnchor.constraint(equalToConstant: 30),
-
-            copyContentButton.heightAnchor.constraint(equalToConstant: 24),
-            copyNameButton.heightAnchor.constraint(equalToConstant: 24),
-            copyAbsPathButton.heightAnchor.constraint(equalToConstant: 24),
-            copyRelPathButton.heightAnchor.constraint(equalToConstant: 24),
-            revealButton.heightAnchor.constraint(equalToConstant: 24),
-            overflowButton.heightAnchor.constraint(equalToConstant: 24)
+            controls.centerYAnchor.constraint(equalTo: headerView.centerYAnchor)
         ])
     }
 
@@ -2964,15 +2971,33 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
-    private func configureIconButton(_ button: HoverButton, symbol: String, tooltip: String, action: Selector) {
-        button.title = ""
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
-        button.imagePosition = .imageOnly
+    /// 顶栏动作按钮：13pt 符号在上、9pt 文字在下。符号点数必须显式给出——不给的话 SF Symbol
+    /// 按默认尺寸铺开，把文字挤出按钮框。高 36（顶栏 50pt，上下各留 7pt），宽取文字宽加左右
+    /// 各 6pt 内边距、下限 34，这样悬停底不贴字。
+    private func configureIconButton(
+        _ button: HoverButton,
+        symbol: String,
+        caption: String,
+        tooltip: String,
+        action: Selector
+    ) {
+        button.caption = caption
+        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .regular))
+        button.imagePosition = .imageAbove
         button.setButtonType(.momentaryChange)
         button.toolTip = tooltip
         button.target = self
         button.action = action
         button.prepareHoverAppearance()
+
+        let captionWidth = (caption as NSString)
+            .size(withAttributes: [.font: NSFont.systemFont(ofSize: 9)]).width
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: ceil(max(34, captionWidth + 12))),
+            button.heightAnchor.constraint(equalToConstant: 36)
+        ])
     }
 
     /// 6 个动作 button（4 copy + reveal + overflow）随文件加载状态统一启用/禁用；

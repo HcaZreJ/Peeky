@@ -18,7 +18,7 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 | JSON / JSONL 节点路径：光标所在行的 jq 路径常驻显示在底部状态栏（超 60 字符中段省略），选区浮动 "jq path" chip 一键复制——点击复制 jq 表达式（`.users[0].user.phone`，可直接 `jq '<粘贴>' file.json`），⌥ 点击复制点分形态（`users.0.user.phone`）；逐行路径索引是纯函数模块 `JSONPathMap`（父指针树，避免逐行物化路径数组），仅在 JSON 结构解析成功时建立，语法错误的文件不显示推测路径 | ✅ |
 | 源码语法高亮：JavaScriptCore + shiki，VS Code Dark Modern 主题，覆盖 16 个扩展名（py / ts / js / mjs / cjs / json / yaml / yml / toml / sh / bash / zsh / swift / ini / conf / config）；流式分块高亮 + 启动预热；超过 1.5M UTF-16 字符时回退为等宽原文 | ✅ |
 | 行号 gutter（`NSRulerView`，只渲染可视区；软换行的续行不编号）；全文可选中 ⌘C | ✅ |
-| 顶栏 6 个图标按钮成组停在右端（复制组 4 个组内间距 8，定位组 2 个组内间距 8，两组之间 12；窗口变宽时富余宽度全部落进标题与按钮组之间的空隙，按钮组不被拉开）：全文（⌥⌘C）、文件名、绝对路径（⇧⌘C）、相对仓库根路径（⌥⇧⌘C；无仓库时置灰）；Reveal in Finder；⋯ 溢出菜单包含 Wrap Lines 开关（markdown 走 WebView，该项对它无作用因而置灰）。全部按钮无壳 + 悬停浅底（`HoverButton`）；选区触发浮动 chip（`NSTextView` 与 Markdown WebView 两条路径，Markdown 场景通过源行号启发式定位）——"path:line" 恒有，JSON / JSONL 且路径非根时左侧并排 "jq path"，两者成组右对齐选区尾端后整体做越界校正 | ✅ |
+| 顶栏 6 个动作按钮成组停在右端，每颗一个 13pt 图标加一行 9pt 文字（复制组 4 个组内间距 8，定位组 2 个组内间距 8，两组之间 12；窗口变宽时富余宽度全部落进标题与按钮组之间的空隙，按钮组不被拉开）：Content 全文（⌥⌘C）、Name 文件名、Full path 绝对路径（⇧⌘C）、Rel path 相对仓库根路径（⌥⇧⌘C；无仓库时置灰）；Finder 即 Reveal in Finder；More 溢出菜单包含 Wrap Lines 开关（markdown 走 WebView，该项对它无作用因而置灰）。全部按钮无壳 + 悬停浅底（`HoverButton`）；选区触发浮动 chip（`NSTextView` 与 Markdown WebView 两条路径，Markdown 场景通过源行号启发式定位）——"path:line" 恒有，JSON / JSONL 且路径非根时左侧并排 "jq path"，两者成组右对齐选区尾端后整体做越界校正 | ✅ |
 | XML / plist 缩进格式化 + 正则语法高亮 | ✅ |
 | 拖放打开 / Finder 打开方式 / 三档大小上限（文件读取 80 MB、富格式化 8 MB、语法高亮 1.5M UTF-16 字符） | ✅ |
 | 端到端冷启计时验收（plan W5） | ⏳ 后续 |

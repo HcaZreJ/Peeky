@@ -31,8 +31,9 @@ private func headerIconButtons(_ window: NSWindow) -> [NSButton] {
     }
     walk(content)
 
-    let headerTitles = ["Copy File Content", "Copy File Name", "Copy Absolute Path",
-                        "Copy Relative Path", "Reveal in Finder", "More"]
+    let headerTitles = ["Copy File Content (⌥⌘C)", "Copy File Name",
+                        "Copy Absolute Path (⇧⌘C)", "Copy Relative Path (⇧⌥⌘C)",
+                        "Reveal in Finder", "View Options"]
     return headerTitles.compactMap { title in
         found.first(where: { $0.toolTip == title })
     }
