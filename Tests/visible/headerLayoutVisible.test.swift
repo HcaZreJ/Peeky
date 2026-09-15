@@ -81,6 +81,11 @@ struct Visible_headerLayout {
         #expect(frames.allSatisfy { $0.width >= 34 })
         // "Full path" 比 "Name" 长，按钮也跟着宽
         #expect(frames[2].width > frames[1].width)
+
+        // 六颗的图标画布同尺寸：SF Symbol 自然高度不一（doc.on.doc 18、ellipsis 5），
+        // imageAbove 把「图标 + 文字」整块居中，画布不统一时文字会落在六个高度上
+        let boxes = Set(headerButtons(window).map { "\($0.button.image?.size ?? .zero)" })
+        #expect(boxes.count == 1)
     }
 
     @Test("6 个按钮各自带图标、文字与 tooltip，点击落在自己身上")

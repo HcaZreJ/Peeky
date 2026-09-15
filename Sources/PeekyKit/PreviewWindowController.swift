@@ -2971,9 +2971,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
-    /// 顶栏动作按钮：13pt 符号在上、9pt 文字在下。符号点数必须显式给出——不给的话 SF Symbol
-    /// 按默认尺寸铺开，把文字挤出按钮框。高 36（顶栏 50pt，上下各留 7pt），宽取文字宽加左右
-    /// 各 6pt 内边距、下限 34，这样悬停底不贴字。
+    /// 顶栏动作按钮：13pt 符号在上、9pt 文字在下。符号一律经 `ToolbarSymbol.uniform` 取统一
+    /// 画布，六颗的图标与文字才各自落在同一条线上。高 36（顶栏 50pt，上下各留 7pt），宽取文字
+    /// 宽加左右各 6pt 内边距、下限 34，这样悬停底不贴字。
     private func configureIconButton(
         _ button: HoverButton,
         symbol: String,
@@ -2982,8 +2982,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         action: Selector
     ) {
         button.caption = caption
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .regular))
+        button.image = ToolbarSymbol.uniform(symbol)
         button.imagePosition = .imageAbove
         button.setButtonType(.momentaryChange)
         button.toolTip = tooltip
