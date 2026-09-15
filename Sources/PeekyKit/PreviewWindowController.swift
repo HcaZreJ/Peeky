@@ -3034,6 +3034,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private func configureOverflowMenu() {
         overflowMenu.delegate = self
+        // 自行管理启用态：Wrap Lines 只作用于 NSTextView，markdown 走 WebView 时它无事可做。
+        overflowMenu.autoenablesItems = false
 
         let wrapItem = NSMenuItem(title: "Wrap Lines", action: #selector(toggleWrap(_:)), keyEquivalent: "")
         wrapItem.target = self
@@ -3042,10 +3044,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         wrapLinesMenuItem = wrapItem
     }
 
-    /// overflowMenu 弹出前刷新「Wrap Lines」勾选态（反映当前 wrapsLines）。
+    /// overflowMenu 弹出前刷新「Wrap Lines」：勾选态反映当前 wrapsLines，启用态反映它这次
+    /// 有没有作用对象——markdown 在 WebView 里渲染，换行由 CSS 决定，这一项对它无效。
     func menuNeedsUpdate(_ menu: NSMenu) {
         if menu === overflowMenu {
             wrapLinesMenuItem?.state = wrapsLines ? .on : .off
+            wrapLinesMenuItem?.isEnabled = !isMarkdownWebActive
         }
     }
 
