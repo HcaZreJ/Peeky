@@ -3,34 +3,22 @@ import Foundation
 
 /// repo-aware 文件树组件：基于 NSOutlineView 的惰性加载文件树。
 ///
-/// 节点首次展开时才调用 `DirectoryLister.list`，结果缓存在节点上；`reload(root:)`
-/// 丢弃旧的节点图（连同其缓存的子项）重建一棵新树。高度由自身管理（随展开/折叠增减），
-/// 不内置滚动——整份 sidebar 已有外层滚动区，避免嵌套滚动的交互冲突。
+/// 节点首次展开时调用 `DirectoryLister.list`，结果缓存在节点上。缓存会在三个时机与磁盘重新对账：
+/// 展开某个目录时、`revealAndSelect` 在缓存里找不到目标时、以及外部调用 `refresh(directories:)`
+/// / `refreshAll()` 时。对账走 `FileTreeNode.reconcile`，URL 没变的条目复用原节点实例，
+/// 于是已展开的子树在刷新后仍然展开。
+/// 高度由自身管理（随展开/折叠增减），不内置滚动——整份 sidebar 已有外层滚动区，
+/// 避免嵌套滚动的交互冲突。
 final class FileTreeView: NSView {
     /// 单击文件行时触发，携带该文件的 URL；单击目录行不触发（只展开/折叠）。
     var onFileClick: ((URL) -> Void)?
 
-    /// 树节点：目录节点的 children 惰性填充；DirectoryLister 抛错时填一条不可点占位子项，
-    /// 使该目录仍可展开但呈现"(无法读取)"而不崩溃。
-    private final class Node {
-        let url: URL
-        let name: String
-        let isDirectory: Bool
-        let isErrorPlaceholder: Bool
-        var childrenLoaded = false
-        var children: [Node] = []
-
-        init(url: URL, name: String, isDirectory: Bool, isErrorPlaceholder: Bool = false) {
-            self.url = url
-            self.name = name
-            self.isDirectory = isDirectory
-            self.isErrorPlaceholder = isErrorPlaceholder
-        }
-    }
-
     private let outlineView = NSOutlineView()
     private var heightConstraint: NSLayoutConstraint!
-    private var rootNode: Node?
+    private var rootNode: FileTreeNode?
+    /// 恢复展开态的过程中把「展开即对账」这条规则让开：此时的 expandItem 只是在重演
+    /// 用户原有的展开状态，磁盘已经在同一轮里列过了。
+    private var isRestoringExpansion = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -86,15 +74,61 @@ final class FileTreeView: NSView {
         }
     }
 
+    /// 测试用：让用例可以按行读出树当前显示成什么样。
+    var outlineViewForTesting: NSOutlineView { outlineView }
+
     // MARK: - 公开接口
 
     /// 清缓存重建：丢弃旧的节点图，以 root 为新的根节点并展开之。
     func reload(root: URL) {
-        let node = Node(url: root, name: root.lastPathComponent, isDirectory: true)
+        let node = FileTreeNode(url: root, name: root.lastPathComponent, isDirectory: true)
         rootNode = node
         outlineView.reloadData()
         outlineView.expandItem(node)
         updateHeight()
+    }
+
+    /// 已经列过磁盘的目录，按「父在前」的次序给出。磁盘变化事件用它来判断这一轮要重列哪些目录；
+    /// 没列过的目录不在其中——它们下次展开时本就现列磁盘。
+    var loadedDirectoryURLs: [URL] {
+        guard let rootNode else { return [] }
+
+        var result: [URL] = []
+        var queue = [rootNode]
+        var index = 0
+        while index < queue.count {
+            let node = queue[index]
+            index += 1
+            guard node.isDirectory, node.childrenLoaded else { continue }
+            result.append(node.url)
+            queue.append(contentsOf: node.children)
+        }
+        return result
+    }
+
+    /// 重列指定的若干目录并把结果落到界面上；展开态与选中行保持不变。
+    ///
+    /// 传进来的 URL 取自 `loadedDirectoryURLs`，与节点上的 URL 是同一批值，按值相等匹配即可。
+    func refresh(directories: [URL]) {
+        guard rootNode != nil, !directories.isEmpty else { return }
+
+        let targets = Set(directories)
+        var didRelist = false
+        forEachLoadedDirectory { node in
+            guard targets.contains(node.url) else { return }
+            refreshChildren(node)
+            didRelist = true
+        }
+
+        guard didRelist else { return }
+        reapplyNodeGraph()
+    }
+
+    /// 重列当前所有已展开目录（⌘R / 刷新按钮的落点）。
+    func refreshAll() {
+        guard rootNode != nil else { return }
+        forEachLoadedDirectory { refreshChildren($0) }
+        reapplyNodeGraph()
     }
 
     /// 逐级展开到 fileURL 并选中滚动可见；fileURL 不在当前根内则不做任何事。
@@ -118,10 +152,18 @@ final class FileTreeView: NSView {
         for index in rootComponents.count..<targetComponents.count {
             loadChildrenIfNeeded(current)
             let componentName = targetComponents[index]
-            guard let next = current.children.first(where: { $0.name.caseInsensitiveCompare(componentName) == .orderedSame }) else {
-                break
+
+            var next = child(of: current, named: componentName)
+            if next == nil {
+                // 缓存是上次展开时的快照，目标可能是之后才落到磁盘上的（已展开的目录
+                // 不会触发 itemWillExpand，拿不到那条对账时机）：现列一次再找一遍。
+                refreshChildren(current)
+                outlineView.reloadItem(current, reloadChildren: true)
+                next = child(of: current, named: componentName)
             }
-            current = next
+
+            guard let found = next else { break }
+            current = found
             if current.isDirectory {
                 outlineView.expandItem(current)
             }
@@ -135,18 +177,20 @@ final class FileTreeView: NSView {
         outlineView.scrollRowToVisible(row)
     }
 
-    // MARK: - 惰性加载
+    // MARK: - 与磁盘对账
 
-    private func loadChildrenIfNeeded(_ node: Node) {
-        guard node.isDirectory, !node.childrenLoaded else { return }
+    /// 无条件重列该目录并与已缓存的子项对账。目录不可读时填一条不可点占位子项，
+    /// 使该目录仍可展开而呈现「(无法读取)」。
+    private func refreshChildren(_ node: FileTreeNode) {
+        guard node.isDirectory else { return }
         node.childrenLoaded = true
 
         do {
             let entries = try DirectoryLister.list(dir: node.url)
-            node.children = entries.map { Node(url: $0.url, name: $0.name, isDirectory: $0.isDirectory) }
+            node.children = FileTreeNode.reconcile(existing: node.children, entries: entries)
         } catch {
             node.children = [
-                Node(
+                FileTreeNode(
                     url: node.url.appendingPathComponent(".peeky-unreadable"),
                     name: "(无法读取)",
                     isDirectory: false,
@@ -154,6 +198,83 @@ final class FileTreeView: NSView {
                 )
             ]
         }
+    }
+
+    private func loadChildrenIfNeeded(_ node: FileTreeNode) {
+        guard node.isDirectory, !node.childrenLoaded else { return }
+        refreshChildren(node)
+    }
+
+    private func child(of node: FileTreeNode, named name: String) -> FileTreeNode? {
+        node.children.first { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    /// 遍历所有已列过磁盘的目录节点，父先于子。
+    private func forEachLoadedDirectory(_ body: (FileTreeNode) -> Void) {
+        guard let rootNode else { return }
+
+        var queue = [rootNode]
+        var index = 0
+        while index < queue.count {
+            let node = queue[index]
+            index += 1
+            guard node.isDirectory, node.childrenLoaded else { continue }
+            body(node)
+            queue.append(contentsOf: node.children)
+        }
+    }
+
+    /// 把重列后的节点图落到 outlineView 上，展开态与选中行原样恢复。
+    private func reapplyNodeGraph() {
+        let expanded = expandedURLs()
+        let selectedURL = (outlineView.item(atRow: outlineView.selectedRow) as? FileTreeNode)?.url
+
+        isRestoringExpansion = true
+        outlineView.reloadData()
+        if let rootNode {
+            outlineView.expandItem(rootNode)
+            for child in rootNode.children {
+                restoreExpansion(expanded, from: child)
+            }
+        }
+        isRestoringExpansion = false
+
+        updateHeight()
+
+        guard let selectedURL, let row = row(forURL: selectedURL) else { return }
+        outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+    }
+
+    private func expandedURLs() -> Set<URL> {
+        var result: Set<URL> = []
+        for row in 0..<outlineView.numberOfRows {
+            guard
+                let node = outlineView.item(atRow: row) as? FileTreeNode,
+                outlineView.isItemExpanded(node)
+            else {
+                continue
+            }
+            result.insert(node.url)
+        }
+        return result
+    }
+
+    /// 自上而下恢复：父展开之后子节点才在 outlineView 里可寻址。
+    private func restoreExpansion(_ urls: Set<URL>, from node: FileTreeNode) {
+        guard node.isDirectory, urls.contains(node.url) else { return }
+        outlineView.expandItem(node)
+        for child in node.children {
+            restoreExpansion(urls, from: child)
+        }
+    }
+
+    private func row(forURL url: URL) -> Int? {
+        for row in 0..<outlineView.numberOfRows {
+            if let node = outlineView.item(atRow: row) as? FileTreeNode, node.url == url {
+                return row
+            }
+        }
+        return nil
     }
 
     // MARK: - 高度自管理
@@ -168,7 +289,7 @@ final class FileTreeView: NSView {
         let row = outlineView.clickedRow
         guard
             row >= 0,
-            let node = outlineView.item(atRow: row) as? Node,
+            let node = outlineView.item(atRow: row) as? FileTreeNode,
             !node.isErrorPlaceholder
         else {
             return
@@ -191,26 +312,26 @@ extension FileTreeView: NSOutlineViewDataSource {
         guard let item else {
             return rootNode == nil ? 0 : 1
         }
-        guard let node = item as? Node, node.isDirectory else { return 0 }
+        guard let node = item as? FileTreeNode, node.isDirectory else { return 0 }
         loadChildrenIfNeeded(node)
         return node.children.count
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
         guard let item else { return rootNode! }
-        let node = item as! Node
+        let node = item as! FileTreeNode
         return node.children[index]
     }
 
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        guard let node = item as? Node else { return false }
+        guard let node = item as? FileTreeNode else { return false }
         return node.isDirectory
     }
 }
 
 extension FileTreeView: NSOutlineViewDelegate {
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
-        guard let node = item as? Node else { return nil }
+        guard let node = item as? FileTreeNode else { return nil }
 
         let identifier = NSUserInterfaceItemIdentifier("FileTreeRow")
         let cell: NSTableCellView
@@ -257,8 +378,19 @@ extension FileTreeView: NSOutlineViewDelegate {
     }
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
-        guard let node = item as? Node else { return false }
+        guard let node = item as? FileTreeNode else { return false }
         return !node.isErrorPlaceholder
+    }
+
+    /// 展开即对账：折叠再展开就是用户手边最近的一次手动刷新。
+    func outlineViewItemWillExpand(_ notification: Notification) {
+        guard
+            !isRestoringExpansion,
+            let node = notification.userInfo?["NSObject"] as? FileTreeNode
+        else {
+            return
+        }
+        refreshChildren(node)
     }
 
     func outlineViewItemDidExpand(_ notification: Notification) {
