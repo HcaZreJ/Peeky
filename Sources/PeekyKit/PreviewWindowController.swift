@@ -20,6 +20,79 @@ private struct FileStamp: Equatable {
     }
 }
 
+/// 全 app 统一的可悬停按钮：无壳，悬停出浅底、字形由次级色提到主色，禁用时落到三级色。
+///
+/// 悬停底 0.14 是这个尺寸下肉眼可辨的下限——侧栏整行用的 0.06 铺在 240pt 宽上才读得出来，
+/// 缩到 20–30pt 见方就没了，同一个不透明度换个面积并不等价。
+///
+/// 语义色取 `.cgColor` 是按「取值当时的绘制外观」解析的一次性快照，所以每次都在
+/// `effectiveAppearance` 下重新解析，浅色深色各自拿到正确的那一个值。
+final class HoverButton: NSButton {
+    private static let hoverAlpha: CGFloat = 0.14
+
+    private var isHovering = false {
+        didSet { updateHoverAppearance() }
+    }
+
+    override var isEnabled: Bool {
+        didSet { updateHoverAppearance() }
+    }
+
+    /// 悬停底画在 bounds 上，而 NSButton 默认的 alignmentRectInsets 非零——不归零的话，
+    /// 一排等高按钮的 frame 会互相错开两三个点，浅底跟着参差。
+    override var alignmentRectInsets: NSEdgeInsets {
+        NSEdgeInsets()
+    }
+
+    /// 建好按钮的外观与命中区；调用方设完 image / title / target-action 之后调一次。
+    func prepareHoverAppearance() {
+        isBordered = false
+        wantsLayer = true
+        layer?.cornerRadius = 5
+        layer?.masksToBounds = true
+        updateHoverAppearance()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for trackingArea in trackingAreas {
+            removeTrackingArea(trackingArea)
+        }
+        addTrackingArea(
+            NSTrackingArea(
+                rect: .zero,
+                options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+                owner: self,
+                userInfo: nil
+            )
+        )
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isHovering = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isHovering = false
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateHoverAppearance()
+    }
+
+    private func updateHoverAppearance() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = (isHovering && isEnabled)
+                ? NSColor.labelColor.withAlphaComponent(Self.hoverAlpha).cgColor
+                : NSColor.clear.cgColor
+        }
+        contentTintColor = isEnabled
+            ? (isHovering ? .labelColor : .secondaryLabelColor)
+            : .tertiaryLabelColor
+    }
+}
+
 private struct PreviewTab {
     let id: UUID
     let url: URL
@@ -56,7 +129,7 @@ private final class FileTabView: NSControl {
     private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let iconView = NSImageView()
-    private let closeButton = NSButton()
+    private let closeButton = HoverButton()
     private let isError: Bool
     private var isHovering = false {
         didSet {
@@ -101,10 +174,10 @@ private final class FileTabView: NSControl {
         closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Tab")
         closeButton.imagePosition = .imageOnly
         closeButton.imageScaling = .scaleProportionallyDown
-        closeButton.isBordered = false
         closeButton.toolTip = "Close Tab"
         closeButton.target = self
         closeButton.action = #selector(closeClicked(_:))
+        closeButton.prepareHoverAppearance()
         closeButton.setContentHuggingPriority(.required, for: .horizontal)
         closeButton.setContentCompressionResistancePriority(.required, for: .horizontal)
         closeButton.translatesAutoresizingMaskIntoConstraints = false
@@ -304,7 +377,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private var pendingMarkdownScrollY: Double?
     private let tabStack = NSStackView()
     private let closeAllRow = NSStackView()
-    private let closeAllButton = NSButton()
+    private let closeAllButton = HoverButton()
     private let outlineScrollView = NSScrollView()
     private let outlineStack = FlippedStackView()
     private let contentView = DropContainerView()
@@ -319,12 +392,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let metaLabel = NSTextField(labelWithString: "")
     private let modeControl = NSSegmentedControl(labels: ["Format", "Raw"], trackingMode: .selectOne, target: nil, action: nil)
     private let viewModeGroup = NSStackView()
-    private let copyContentButton = NSButton()
-    private let copyNameButton = NSButton()
-    private let copyAbsPathButton = NSButton()
-    private let copyRelPathButton = NSButton()
-    private let revealButton = NSButton()
-    private let overflowButton = NSButton()
+    private let copyContentButton = HoverButton()
+    private let copyNameButton = HoverButton()
+    private let copyAbsPathButton = HoverButton()
+    private let copyRelPathButton = HoverButton()
+    private let revealButton = HoverButton()
+    private let overflowButton = HoverButton()
     private let overflowMenu = NSMenu()
     private var wrapLinesMenuItem: NSMenuItem?
     private let scrollView = DropScrollView()
@@ -734,10 +807,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         closeAllButton.title = "Close All"
         closeAllButton.font = NSFont.systemFont(ofSize: 11)
-        closeAllButton.isBordered = false
-        closeAllButton.contentTintColor = .secondaryLabelColor
+        closeAllButton.toolTip = "Close All Files"
         closeAllButton.target = self
         closeAllButton.action = #selector(closeAllTabsClicked(_:))
+        closeAllButton.prepareHoverAppearance()
         closeAllButton.setContentHuggingPriority(.required, for: .horizontal)
         closeAllButton.translatesAutoresizingMaskIntoConstraints = false
 
@@ -2901,21 +2974,22 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
-    private func configureIconButton(_ button: NSButton, symbol: String, tooltip: String, action: Selector) {
+    private func configureIconButton(_ button: HoverButton, symbol: String, tooltip: String, action: Selector) {
         button.title = ""
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
         button.imagePosition = .imageOnly
-        button.bezelStyle = .texturedRounded
-        button.setButtonType(.momentaryPushIn)
+        button.setButtonType(.momentaryChange)
         button.toolTip = tooltip
         button.target = self
         button.action = action
+        button.prepareHoverAppearance()
     }
 
     /// 6 个动作 button（4 copy + reveal + overflow）随文件加载状态统一启用/禁用；
     /// overflow 一并禁用，避免空态浮出 wrap 菜单。
     private func setActionButtonsEnabled(_ enabled: Bool) {
-        [copyContentButton, copyNameButton, copyAbsPathButton, copyRelPathButton, revealButton, overflowButton].forEach {
+        let buttons: [HoverButton] = [copyContentButton, copyNameButton, copyAbsPathButton, copyRelPathButton, revealButton, overflowButton]
+        buttons.forEach {
             $0.isEnabled = enabled
         }
     }
