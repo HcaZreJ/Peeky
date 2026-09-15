@@ -138,6 +138,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         editMenu.delegate = self
         self.editMenu = editMenu
 
+        let viewMenuItem = NSMenuItem()
+        mainMenu.addItem(viewMenuItem)
+
+        // Reload/Refresh 在 macOS 上的标准归宿是 View（Safari 的 Reload Page 也在这里，
+        // 快捷键同样是 ⌘R）；File 菜单的共同总体是「对文档做的事」，装不下目录树。
+        let viewMenu = NSMenu(title: "View")
+        viewMenuItem.submenu = viewMenu
+
+        let refreshItem = NSMenuItem(
+            title: "Refresh from Disk",
+            action: #selector(refreshFromDiskAction(_:)),
+            keyEquivalent: "r"
+        )
+        refreshItem.target = self
+        viewMenu.addItem(refreshItem)
+
         NSApp.mainMenu = mainMenu
     }
 
@@ -165,8 +181,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     /// 复制四件套：无打开文件时全部禁用；相对路径项额外要求命中 repo root。
-    /// 两个关闭项要求存在 key 窗口。
+    /// 两个关闭项要求存在 key 窗口。刷新要求当前窗口有树根。
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(refreshFromDiskAction(_:)) {
+            return activeWindowController()?.hasFileTreeRoot == true
+        }
+
         let closeActions: Set<Selector> = [
             #selector(closeFileAction(_:)),
             #selector(closeWindowAction(_:))
@@ -213,6 +233,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     @objc private func copyRelativePathAction(_ sender: Any?) {
         activeWindowController()?.copyRelativePath()
+    }
+
+    /// ⌘R：文件树与当前文件一起跟磁盘对一次账。
+    @objc private func refreshFromDiskAction(_ sender: Any?) {
+        activeWindowController()?.refreshFromDisk()
     }
 
     // MARK: - 关闭（⌘W 关文件，⇧⌘W 关窗口）

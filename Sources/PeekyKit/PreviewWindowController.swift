@@ -2,6 +2,24 @@ import AppKit
 import Foundation
 import WebKit
 
+/// 文件内容的指纹：磁盘变化事件到达时先比这一对，相等就不必重读整个文件。
+private struct FileStamp: Equatable {
+    let size: Int64
+    let mtime: Date
+
+    /// 文件不存在或属性读不到时为 nil。nil 与任何有值的 stamp 不相等，于是「文件被删了」
+    /// 与「文件又回来了」都会被判成变化。
+    static func of(_ url: URL) -> FileStamp? {
+        guard
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
+            let mtime = values.contentModificationDate
+        else {
+            return nil
+        }
+        return FileStamp(size: Int64(values.fileSize ?? 0), mtime: mtime)
+    }
+}
+
 private struct PreviewTab {
     let id: UUID
     let url: URL
@@ -10,6 +28,8 @@ private struct PreviewTab {
     var mode: PreviewMode
     var targetLine: Int?
     var targetColumn: Int?
+    /// 读到 document 时磁盘上的指纹，用来判断这份内容是不是已经过期。
+    var stamp: FileStamp?
 
     init(url: URL, document: LoadedText?, errorMessage: String?) {
         self.id = UUID()
@@ -19,6 +39,7 @@ private struct PreviewTab {
         self.mode = .formatted
         self.targetLine = nil
         self.targetColumn = nil
+        self.stamp = nil
     }
 }
 
@@ -277,6 +298,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let tabListDocumentView = DropContainerView()
     private let sidebarStack = NSStackView()
     private let fileTreeView = FileTreeView()
+    /// 盯着当前树根的磁盘变化；范围由 FileTreeRefresh.scope 收窄到已展开目录 + 最前 tab 的文件。
+    private var directoryWatcher: DirectoryWatcher?
+    /// markdown 原地重读后要还原的滚动位置，在 didFinish 里消费（见 rerenderActiveTabPreservingScrollPosition）。
+    private var pendingMarkdownScrollY: Double?
     private let tabStack = NSStackView()
     private let closeAllRow = NSStackView()
     private let closeAllButton = NSButton()
@@ -509,6 +534,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     func windowWillClose(_ notification: Notification) {
+        directoryWatcher?.stop()
+        directoryWatcher = nil
         onClose?()
     }
 
@@ -1391,12 +1418,19 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func loadTab(url: URL) -> PreviewTab {
+        // 指纹取在读内容之前：读的过程中文件又被改写时，记下的是旧指纹，下一轮仍然判为变化。
+        // 反过来（读完再取）会把新指纹配在旧内容上，那次改写就永久看不见了。
+        let stamp = FileStamp.of(url)
+
+        var tab: PreviewTab
         do {
             let loaded = try TextFileLoader.load(url: url)
-            return PreviewTab(url: loaded.url, document: loaded, errorMessage: nil)
+            tab = PreviewTab(url: loaded.url, document: loaded, errorMessage: nil)
         } catch {
-            return PreviewTab(url: url, document: nil, errorMessage: error.localizedDescription)
+            tab = PreviewTab(url: url, document: nil, errorMessage: error.localizedDescription)
         }
+        tab.stamp = stamp
+        return tab
     }
 
     /// 树根 = RepoRoot.discover(from: target) ?? (target 为目录 ? target : 其父目录)。
@@ -1417,6 +1451,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         treeRootURL = newRoot
         fileTreeView.reload(root: newRoot)
+        startWatchingTreeRoot(newRoot)
 
         if !targetIsDirectory {
             fileTreeView.revealAndSelect(fileURL: standardizedTarget)
@@ -1550,6 +1585,99 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         updateSidebarSections()
     }
 
+    // MARK: - 与磁盘对账（⌘R / FSEvents）
+
+    /// 菜单项的启用条件：有树根才谈得上刷新。
+    var hasFileTreeRoot: Bool {
+        treeRootURL != nil
+    }
+
+    /// ⌘R 的落点：已展开的目录与最前 tab 的文件一起跟磁盘对一次账。自动刷新覆盖不到的场景
+    /// 走这里——树根在不送 FSEvents 的卷上（网络卷、部分虚拟文件系统），或者想主动确认一次。
+    /// 当前区块不是 Files 时也照样刷，树在后台更新好，切过去就是新的。
+    func refreshFromDisk() {
+        guard hasFileTreeRoot else { return }
+        fileTreeView.refreshAll()
+        reloadActiveFileIfChanged()
+    }
+
+    private func startWatchingTreeRoot(_ root: URL) {
+        if directoryWatcher == nil {
+            directoryWatcher = DirectoryWatcher { [weak self] paths, mustScanSubDirectories in
+                MainActor.assumeIsolated {
+                    self?.directoryDidChange(
+                        changedPaths: paths,
+                        mustScanSubDirectories: mustScanSubDirectories
+                    )
+                }
+            }
+        }
+        directoryWatcher?.watch(root: root)
+    }
+
+    /// 磁盘变化落到界面上的唯一入口。范围先经 FileTreeRefresh.scope 收窄：只重列此刻已经
+    /// 展开的目录，只考虑最前 tab 的那个文件——没展开的目录下次展开时自然读到最新磁盘状态，
+    /// 后台 tab 的文件切过去时才对账（见 selectTab）。
+    private func directoryDidChange(changedPaths: [String], mustScanSubDirectories: Bool) {
+        let scope = FileTreeRefresh.scope(
+            changedPaths: changedPaths,
+            mustScanSubDirectories: mustScanSubDirectories,
+            loadedDirectories: fileTreeView.loadedDirectoryURLs,
+            activeFileURL: activeTab?.url
+        )
+        guard !scope.isEmpty else { return }
+
+        fileTreeView.refresh(directories: scope.directoriesToReload)
+        if scope.touchesActiveFile {
+            reloadActiveFileIfChanged()
+        }
+    }
+
+    private func reloadActiveFileIfChanged() {
+        guard let index = activeTabIndex, reloadTabFromDiskIfChanged(index: index) else { return }
+        rerenderActiveTabPreservingScrollPosition()
+    }
+
+    /// 指纹变了才重读。返回值表示这一次是否真的换了内容，调用方据此决定要不要重渲染。
+    @discardableResult
+    private func reloadTabFromDiskIfChanged(index: Int) -> Bool {
+        let stamp = FileStamp.of(tabs[index].url)
+        guard stamp != tabs[index].stamp else { return false }
+
+        let reloaded = loadTab(url: tabs[index].url)
+        tabs[index].document = reloaded.document
+        tabs[index].errorMessage = reloaded.errorMessage
+        tabs[index].stamp = reloaded.stamp
+        return true
+    }
+
+    /// 原地重渲染并留在原来的阅读位置——内容在眼前换掉已经是最强的反馈，再把人弹回文首
+    /// 就变成了干扰。
+    private func rerenderActiveTabPreservingScrollPosition() {
+        if isMarkdownWebActive {
+            // WebView 的滚动位置只有 JS 读得到；先取回来，装进 pendingMarkdownScrollY，
+            // 由下一次 didFinish 还原。
+            markdownWebView.evaluateJavaScript("window.scrollY") { [weak self] value, _ in
+                guard let self else { return }
+                let offset = value as? Double ?? 0
+                self.pendingMarkdownScrollY = offset > 0 ? offset : nil
+                self.renderActiveTab()
+            }
+            return
+        }
+
+        let offset = scrollView.contentView.bounds.origin
+        renderActiveTab()
+        // render() 末尾的 scheduleInitialScroll 也排在主队列上（它会跳到文首）；
+        // 这一次排在它之后，因此是最终生效的那次。
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.scrollView.contentView.scroll(to: offset)
+            self.scrollView.reflectScrolledClipView(self.scrollView.contentView)
+            self.gutterView.needsDisplay = true
+        }
+    }
+
     private func tabSubtitle(for tab: PreviewTab) -> String {
         if let document = tab.document {
             return [
@@ -1562,8 +1690,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func selectTab(id: UUID) {
-        guard tabs.contains(where: { $0.id == id }) else { return }
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         activeTabID = id
+        // 只有最前 tab 的文件被监听着；切过来的这一刻补一次对账，后台期间的改写在此落地。
+        reloadTabFromDiskIfChanged(index: index)
         rebuildTabList()
         // 文件树跟随新激活 tab：仍在当前根内只定位选中，在根外重算树根。
         if let url = activeTab?.url {
@@ -1824,7 +1954,17 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// WebView 载入完成：若有待定源行，滚到 sourceLine 不超过它的最后一个标题（就近定位）。
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        guard webView === markdownWebView, let line = pendingMarkdownScrollLine else { return }
+        guard webView === markdownWebView else { return }
+
+        // 原地重读留下的阅读位置优先于跳行：这一次加载不是「打开文件」而是「内容变了」。
+        if let scrollY = pendingMarkdownScrollY {
+            pendingMarkdownScrollY = nil
+            pendingMarkdownScrollLine = nil
+            webView.evaluateJavaScript("window.scrollTo(0, \(scrollY))")
+            return
+        }
+
+        guard let line = pendingMarkdownScrollLine else { return }
         pendingMarkdownScrollLine = nil
 
         var targetIndex: Int?

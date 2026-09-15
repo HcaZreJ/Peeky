@@ -2,7 +2,7 @@
 
 ## 语言 / 运行时
 - **Swift 6.0**（swift-tools-version 6.0），macOS 13+，AppKit + WebKit（markdown 预览用 WKWebView；无 SwiftUI）
-- 系统框架：`AppKit` / `WebKit`（markdown WebView 渲染）/ `Foundation` / `JavaScriptCore`（高亮引擎宿主）/ `os`（日志）
+- 系统框架：`AppKit` / `WebKit`（markdown WebView 渲染）/ `Foundation`（含 FSEvents，用于文件树的磁盘监听）/ `JavaScriptCore`（高亮引擎宿主）/ `os`（日志）
 - 构建仅需 **Xcode CommandLineTools**（纯 SwiftPM，无 Xcode 工程）；重新生成 shiki bundle 需 Node ≥22（仅构建期）
 
 ## 依赖
