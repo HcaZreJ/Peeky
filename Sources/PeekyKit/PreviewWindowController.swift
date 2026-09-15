@@ -53,19 +53,11 @@ final class HoverButton: NSButton {
         updateHoverAppearance()
     }
 
+    private var hoverTrackingArea: NSTrackingArea?
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        for trackingArea in trackingAreas {
-            removeTrackingArea(trackingArea)
-        }
-        addTrackingArea(
-            NSTrackingArea(
-                rect: .zero,
-                options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-                owner: self,
-                userInfo: nil
-            )
-        )
+        HoverTracking.reinstall(on: self, previous: &hoverTrackingArea)
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -215,19 +207,11 @@ private final class FileTabView: NSControl {
         fatalError("init(coder:) has not been implemented")
     }
 
+    private var hoverTrackingArea: NSTrackingArea?
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        for trackingArea in trackingAreas {
-            removeTrackingArea(trackingArea)
-        }
-        addTrackingArea(
-            NSTrackingArea(
-                rect: .zero,
-                options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-                owner: self,
-                userInfo: nil
-            )
-        )
+        HoverTracking.reinstall(on: self, previous: &hoverTrackingArea)
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -313,19 +297,11 @@ private final class MarkdownOutlineItemView: NSControl {
         fatalError("init(coder:) has not been implemented")
     }
 
+    private var hoverTrackingArea: NSTrackingArea?
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        for trackingArea in trackingAreas {
-            removeTrackingArea(trackingArea)
-        }
-        addTrackingArea(
-            NSTrackingArea(
-                rect: .zero,
-                options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-                owner: self,
-                userInfo: nil
-            )
-        )
+        HoverTracking.reinstall(on: self, previous: &hoverTrackingArea)
     }
 
     override func mouseEntered(with event: NSEvent) {

@@ -47,7 +47,7 @@ PreviewWindowController(约 1.8k 行,唯一持有状态的 UI 控制器)
 FileTreeView(NSOutlineView 惰性树) → FileTreeNode(节点 + reconcile) / DirectoryLister
 MarkdownHTMLRenderer(Markdown → HTML,交给 WebView);PreviewRenderer(非 Markdown 的路径选择与编排)
   → JSONFormatter / XMLFormatter / SyntaxHighlighter / MarkdownRenderer(大纲抽取 + 超 8 MB 时的兜底) / FileKind
-叶子纯函数模块:JSONFormatter · JSONHighlighter · JSONPathMap(逐行节点路径索引 + jq/点分序列化) · PeekyTheme · MarkdownHTMLRenderer · MarkdownLinkPolicy(链接点击导航分流) · XMLFormatter · MarkdownRenderer · SyntaxHighlighter · RepoRoot · DirectoryLister · FileTreeRefresh(磁盘事件 → 刷新范围)
+叶子纯函数模块:JSONFormatter · JSONHighlighter · JSONPathMap(逐行节点路径索引 + jq/点分序列化) · PeekyTheme · MarkdownHTMLRenderer · MarkdownLinkPolicy(链接点击导航分流) · XMLFormatter · MarkdownRenderer · SyntaxHighlighter · RepoRoot · DirectoryLister · FileTreeRefresh(磁盘事件 → 刷新范围) · HoverTracking(悬停 tracking area 安装，保住系统的 tooltip 区)
 服务单例:HighlightService(JSC + shiki-bundle,私有串行队列,资源缺失或 JS 异常时永久降级为纯文本)
 服务实例:DirectoryWatcher(FSEvents,每窗口一个,盯当前树根;后台队列收事件、回主线程交回调)
 ```
