@@ -18,7 +18,7 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 | JSON / JSONL 节点路径：光标所在行的 jq 路径常驻显示在底部状态栏（超 60 字符中段省略），选区浮动 "jq path" chip 一键复制——点击复制 jq 表达式（`.users[0].user.phone`，可直接 `jq '<粘贴>' file.json`），⌥ 点击复制点分形态（`users.0.user.phone`）；逐行路径索引是纯函数模块 `JSONPathMap`（父指针树，避免逐行物化路径数组），仅在 JSON 结构解析成功时建立，语法错误的文件不显示推测路径 | ✅ |
 | 源码语法高亮：JavaScriptCore + shiki，VS Code Dark Modern 主题，覆盖 16 个扩展名（py / ts / js / mjs / cjs / json / yaml / yml / toml / sh / bash / zsh / swift / ini / conf / config）；流式分块高亮 + 启动预热；超过 1.5M UTF-16 字符时回退为等宽原文 | ✅ |
 | 行号 gutter（`NSRulerView`，只渲染可视区；软换行的续行不编号）；全文可选中 ⌘C | ✅ |
-| 顶栏 6 个动作按钮成组停在右端，每颗一个 13pt 图标加一行 9pt 文字（复制组 4 个组内间距 8，定位组 2 个组内间距 8，两组之间 12；窗口变宽时富余宽度全部落进标题与按钮组之间的空隙，按钮组不被拉开）：Content 全文（⌥⌘C）、Name 文件名、Full path 绝对路径（⇧⌘C）、Rel path 相对仓库根路径（⌥⇧⌘C；无仓库时置灰）；Finder 即 Reveal in Finder；More 溢出菜单包含 Wrap Lines 开关（markdown 走 WebView，该项对它无作用因而置灰）。全部按钮无壳 + 悬停浅底（`HoverButton`）；选区触发浮动 chip（`NSTextView` 与 Markdown WebView 两条路径，Markdown 场景通过源行号启发式定位）——"path:line" 恒有，JSON / JSONL 且路径非根时左侧并排 "jq path"，两者成组右对齐选区尾端后整体做越界校正 | ✅ |
+| 顶栏 6 个动作按钮成组停在右端，每颗一个自绘图标（墨迹 14×14，逐颗相同）加一行 9pt 文字（复制组 4 个组内间距 8，定位组 2 个组内间距 8，两组之间 12；窗口变宽时富余宽度全部落进标题与按钮组之间的空隙，按钮组不被拉开）：Content 全文（⌥⌘C）、Name 文件名、Full path 绝对路径（⇧⌘C）、Rel path 相对仓库根路径（⌥⇧⌘C；无仓库时置灰）；Finder 即 Reveal in Finder；More 溢出菜单包含 Wrap Lines 开关（markdown 走 WebView，该项对它无作用因而置灰）。全部按钮无壳 + 悬停浅底（`HoverButton`）；选区触发浮动 chip（`NSTextView` 与 Markdown WebView 两条路径，Markdown 场景通过源行号启发式定位）——"path:line" 恒有，JSON / JSONL 且路径非根时左侧并排 "jq path"，两者成组右对齐选区尾端后整体做越界校正 | ✅ |
 | XML / plist 缩进格式化 + 正则语法高亮 | ✅ |
 | 拖放打开 / Finder 打开方式 / 三档大小上限（文件读取 80 MB、富格式化 8 MB、语法高亮 1.5M UTF-16 字符） | ✅ |
 | 端到端冷启计时验收（plan W5） | ⏳ 后续 |
@@ -47,7 +47,7 @@ PreviewWindowController(约 1.8k 行,唯一持有状态的 UI 控制器)
 FileTreeView(NSOutlineView 惰性树) → FileTreeNode(节点 + reconcile) / DirectoryLister
 MarkdownHTMLRenderer(Markdown → HTML,交给 WebView);PreviewRenderer(非 Markdown 的路径选择与编排)
   → JSONFormatter / XMLFormatter / SyntaxHighlighter / MarkdownRenderer(大纲抽取 + 超 8 MB 时的兜底) / FileKind
-叶子纯函数模块:JSONFormatter · JSONHighlighter · JSONPathMap(逐行节点路径索引 + jq/点分序列化) · PeekyTheme · MarkdownHTMLRenderer · MarkdownLinkPolicy(链接点击导航分流) · XMLFormatter · MarkdownRenderer · SyntaxHighlighter · RepoRoot · DirectoryLister · FileTreeRefresh(磁盘事件 → 刷新范围) · HoverTracking(悬停 tracking area 安装，保住系统的 tooltip 区) · ToolbarSymbol(符号墨迹归一到同一高度再摆进统一画布，六颗图标等高、文字同基线)
+叶子纯函数模块:JSONFormatter · JSONHighlighter · JSONPathMap(逐行节点路径索引 + jq/点分序列化) · PeekyTheme · MarkdownHTMLRenderer · MarkdownLinkPolicy(链接点击导航分流) · XMLFormatter · MarkdownRenderer · SyntaxHighlighter · RepoRoot · DirectoryLister · FileTreeRefresh(磁盘事件 → 刷新范围) · HoverTracking(悬停 tracking area 安装，保住系统的 tooltip 区) · ToolbarIcon(顶栏六颗图标同网格自绘，外接框逐颗相同)
 服务单例:HighlightService(JSC + shiki-bundle,私有串行队列,资源缺失或 JS 异常时永久降级为纯文本)
 服务实例:DirectoryWatcher(FSEvents,每窗口一个,盯当前树根;后台队列收事件、回主线程交回调)
 ```

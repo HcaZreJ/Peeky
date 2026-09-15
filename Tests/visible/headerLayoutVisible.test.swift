@@ -43,10 +43,10 @@ private func headerButtons(_ window: NSWindow) -> [(button: NSButton, frame: NSR
     }
 }
 
-/// 量一张模板图里**墨迹**的高度（不是 image.size——那里面含留白）。超采样 4 倍再扫 alpha，
+/// 量一张模板图里**墨迹**的外接框（不是 image.size——那里面含留白）。超采样 4 倍再扫 alpha，
 /// 描边末端是亚像素的，按 1 倍扫会把末端算丢。
 @MainActor
-private func inkHeight(of image: NSImage) -> CGFloat? {
+private func inkSize(of image: NSImage) -> NSSize? {
     let sample: CGFloat = 4
     let wide = Int((image.size.width * sample).rounded(.up))
     let high = Int((image.size.height * sample).rounded(.up))
@@ -68,15 +68,20 @@ private func inkHeight(of image: NSImage) -> CGFloat? {
     image.draw(in: NSRect(origin: .zero, size: NSSize(width: wide, height: high)))
     NSGraphicsContext.restoreGraphicsState()
 
-    var top = high, bottom = -1
+    var left = wide, right = -1, top = high, bottom = -1
     for row in 0..<high {
         for column in 0..<wide where (rep.colorAt(x: column, y: row)?.alphaComponent ?? 0) > 0.08 {
+            left = min(left, column)
+            right = max(right, column)
             top = min(top, row)
             bottom = max(bottom, row)
         }
     }
     guard bottom >= 0 else { return nil }
-    return CGFloat(bottom - top + 1) / sample
+    return NSSize(
+        width: CGFloat(right - left + 1) / sample,
+        height: CGFloat(bottom - top + 1) / sample
+    )
 }
 
 @Suite("Visible_headerLayout")
@@ -123,23 +128,26 @@ struct Visible_headerLayout {
         #expect(boxes.count == 1)
     }
 
-    @Test("六颗图标的墨迹等高，落在同一条水平带上")
-    func iconInkSharesOneHeight() throws {
+    @Test("六颗图标同尺寸：墨迹外接框都是 14×14")
+    func iconInkSharesOneBox() throws {
         let (_, window) = try makeLoadedController()
         let buttons = headerButtons(window).map(\.button)
         #expect(buttons.count == 6)
 
-        // SF Symbol 是按坐在文字基线上设计的，墨高天生差得很远（13pt 下 doc.on.doc 16、
-        // folder 12、ellipsis 只有 3）。ToolbarSymbol 把墨迹缩放到同一高度再摆进画布，
-        // 这条断言守住那个结果——换图标时墨高一旦重新散开，这里就会红。
-        var heights: [CGFloat] = []
+        // 六颗同网格自绘，墨迹并集按长边缩到 ToolbarIcon.inkSide，所以外接框逐颗相同。
+        // 换图标时尺寸一旦重新散开，这里就会红——这一排「大小不一」被用户挑过两次。
+        var sizes: [NSSize] = []
         for button in buttons {
             let image = try #require(button.image, "\(button.toolTip ?? "?") 没有图标")
-            heights.append(try #require(inkHeight(of: image), "\(button.toolTip ?? "?") 图标是空的"))
+            sizes.append(try #require(inkSize(of: image), "\(button.toolTip ?? "?") 图标是空的"))
         }
-        let spread = (heights.max() ?? 0) - (heights.min() ?? 0)
-        #expect(spread <= 1.0, "六颗图标墨高极差 \(spread)pt，超过 1pt 就肉眼可见")
-        #expect(heights.allSatisfy { $0 >= ToolbarSymbol.inkHeight - 1 })
+        let widths = sizes.map(\.width)
+        let heights = sizes.map(\.height)
+        let widthSpread = (widths.max() ?? 0) - (widths.min() ?? 0)
+        let heightSpread = (heights.max() ?? 0) - (heights.min() ?? 0)
+        #expect(widthSpread <= 1.0, "六颗图标墨宽极差 \(widthSpread)pt，超过 1pt 就肉眼可见")
+        #expect(heightSpread <= 1.0, "六颗图标墨高极差 \(heightSpread)pt，超过 1pt 就肉眼可见")
+        #expect(sizes.allSatisfy { abs(max($0.width, $0.height) - ToolbarIcon.inkSide) <= 1.0 })
     }
 
     @Test("6 个按钮各自带图标、文字与 tooltip，点击落在自己身上")
