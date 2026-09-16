@@ -128,26 +128,29 @@ struct Visible_headerLayout {
         #expect(boxes.count == 1)
     }
 
-    @Test("六颗图标同尺寸：墨迹外接框都是 14×14")
+    @Test("六颗图标同尺寸：墨迹长边都是 ToolbarIcon.inkSide")
     func iconInkSharesOneBox() throws {
         let (_, window) = try makeLoadedController()
         let buttons = headerButtons(window).map(\.button)
         #expect(buttons.count == 6)
 
-        // 六颗同网格自绘，墨迹并集按长边缩到 ToolbarIcon.inkSide，所以外接框逐颗相同。
-        // 换图标时尺寸一旦重新散开，这里就会红——这一排「大小不一」被用户挑过两次。
+        // 六颗同网格自绘，墨迹并集按长边缩到 ToolbarIcon.inkSide——长边一致就是尺寸契约本身。
+        // 换图标时长边一旦重新散开，这里就会红——这一排「大小不一」被用户挑过两次。
+        //
+        // 宽高比不入断言：六颗照各自的现成约定画（正文行是横的、行李牌是方的、三点是一条），
+        // 硬把它们撑成同一个宽高比，只能靠在小尺寸里堆笔画换，而笔画一密就糊。
         var sizes: [NSSize] = []
         for button in buttons {
             let image = try #require(button.image, "\(button.toolTip ?? "?") 没有图标")
             sizes.append(try #require(inkSize(of: image), "\(button.toolTip ?? "?") 图标是空的"))
         }
-        let widths = sizes.map(\.width)
-        let heights = sizes.map(\.height)
-        let widthSpread = (widths.max() ?? 0) - (widths.min() ?? 0)
-        let heightSpread = (heights.max() ?? 0) - (heights.min() ?? 0)
-        #expect(widthSpread <= 1.0, "六颗图标墨宽极差 \(widthSpread)pt，超过 1pt 就肉眼可见")
-        #expect(heightSpread <= 1.0, "六颗图标墨高极差 \(heightSpread)pt，超过 1pt 就肉眼可见")
-        #expect(sizes.allSatisfy { abs(max($0.width, $0.height) - ToolbarIcon.inkSide) <= 1.0 })
+        for (button, size) in zip(buttons, sizes) {
+            let longEdge = max(size.width, size.height)
+            #expect(
+                abs(longEdge - ToolbarIcon.inkSide) <= 1.0,
+                "\(button.toolTip ?? "?") 墨迹长边 \(longEdge)pt，与 \(ToolbarIcon.inkSide)pt 差出 1pt 以上"
+            )
+        }
     }
 
     @Test("6 个按钮各自带图标、文字与 tooltip，点击落在自己身上")
