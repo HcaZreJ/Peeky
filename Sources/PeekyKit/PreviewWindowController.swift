@@ -34,6 +34,12 @@ final class HoverButton: NSButton {
         didSet { updateHoverAppearance() }
     }
 
+    /// 图标下方的 9pt 文字。字色跟 `contentTintColor` 同步——图标与文字是同一颗按钮的两个
+    /// 部件，不同步的话悬停时会出现「图标亮了字没亮」。
+    var caption: String? {
+        didSet { updateHoverAppearance() }
+    }
+
     override var isEnabled: Bool {
         didSet { updateHoverAppearance() }
     }
@@ -53,19 +59,11 @@ final class HoverButton: NSButton {
         updateHoverAppearance()
     }
 
+    private var hoverTrackingArea: NSTrackingArea?
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        for trackingArea in trackingAreas {
-            removeTrackingArea(trackingArea)
-        }
-        addTrackingArea(
-            NSTrackingArea(
-                rect: .zero,
-                options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-                owner: self,
-                userInfo: nil
-            )
-        )
+        HoverTracking.reinstall(on: self, previous: &hoverTrackingArea)
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -87,9 +85,22 @@ final class HoverButton: NSButton {
                 ? NSColor.labelColor.withAlphaComponent(Self.hoverAlpha).cgColor
                 : NSColor.clear.cgColor
         }
-        contentTintColor = isEnabled
+        let tint: NSColor = isEnabled
             ? (isHovering ? .labelColor : .secondaryLabelColor)
             : .tertiaryLabelColor
+        contentTintColor = tint
+
+        guard let caption else { return }
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        attributedTitle = NSAttributedString(
+            string: caption,
+            attributes: [
+                .foregroundColor: tint,
+                .font: NSFont.systemFont(ofSize: 9, weight: .regular),
+                .paragraphStyle: paragraph
+            ]
+        )
     }
 }
 
@@ -215,19 +226,11 @@ private final class FileTabView: NSControl {
         fatalError("init(coder:) has not been implemented")
     }
 
+    private var hoverTrackingArea: NSTrackingArea?
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        for trackingArea in trackingAreas {
-            removeTrackingArea(trackingArea)
-        }
-        addTrackingArea(
-            NSTrackingArea(
-                rect: .zero,
-                options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-                owner: self,
-                userInfo: nil
-            )
-        )
+        HoverTracking.reinstall(on: self, previous: &hoverTrackingArea)
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -313,19 +316,11 @@ private final class MarkdownOutlineItemView: NSControl {
         fatalError("init(coder:) has not been implemented")
     }
 
+    private var hoverTrackingArea: NSTrackingArea?
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        for trackingArea in trackingAreas {
-            removeTrackingArea(trackingArea)
-        }
-        addTrackingArea(
-            NSTrackingArea(
-                rect: .zero,
-                options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
-                owner: self,
-                userInfo: nil
-            )
-        )
+        HoverTracking.reinstall(on: self, previous: &hoverTrackingArea)
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -902,14 +897,15 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         viewModeGroup.translatesAutoresizingMaskIntoConstraints = false
         viewModeGroup.addArrangedSubview(modeControl)
 
-        // 4 个独立文件级复制动作：各自图标编码"复制哪种信息"，点击即时生效，不再有
-        // "点了才发现是菜单"的隐喻错位（见 plan D8）。
-        configureIconButton(copyContentButton, symbol: "doc.on.clipboard", tooltip: "Copy File Content", action: #selector(copyContentClicked(_:)))
-        configureIconButton(copyNameButton, symbol: "character.textbox", tooltip: "Copy File Name", action: #selector(copyNameClicked(_:)))
-        configureIconButton(copyAbsPathButton, symbol: "link", tooltip: "Copy Absolute Path", action: #selector(copyAbsPathClicked(_:)))
-        configureIconButton(copyRelPathButton, symbol: "arrow.turn.up.right", tooltip: "Copy Relative Path", action: #selector(copyRelPathClicked(_:)))
-        configureIconButton(revealButton, symbol: "folder", tooltip: "Reveal in Finder", action: #selector(revealInFinder(_:)))
-        configureIconButton(overflowButton, symbol: "ellipsis.circle", tooltip: "More", action: #selector(showOverflowMenu(_:)))
+        // 6 个动作各自一个图标加一行文字。"复制路径 / 复制相对路径 / 复制文件名"这三个动作在
+        // SF Symbols、Codicons、Material、Lucide 里都没有约定符号，VS Code 对它们用的是纯文字
+        // 菜单项——含义由文字承担，图标提供形状差异帮助定位，六颗同网格自绘（见 ToolbarIcon）。
+        configureIconButton(copyContentButton, icon: .content, caption: "Content", tooltip: "Copy File Content (⌥⌘C)", action: #selector(copyContentClicked(_:)))
+        configureIconButton(copyNameButton, icon: .name, caption: "Name", tooltip: "Copy File Name", action: #selector(copyNameClicked(_:)))
+        configureIconButton(copyAbsPathButton, icon: .fullPath, caption: "Full path", tooltip: "Copy Absolute Path (⇧⌘C)", action: #selector(copyAbsPathClicked(_:)))
+        configureIconButton(copyRelPathButton, icon: .relPath, caption: "Rel path", tooltip: "Copy Relative Path (⇧⌥⌘C)", action: #selector(copyRelPathClicked(_:)))
+        configureIconButton(revealButton, icon: .revealInFinder, caption: "Finder", tooltip: "Reveal in Finder", action: #selector(revealInFinder(_:)))
+        configureIconButton(overflowButton, icon: .more, caption: "More", tooltip: "View Options", action: #selector(showOverflowMenu(_:)))
         configureOverflowMenu()
 
         // copyGroup（4 个文件级复制动作）与 locationGroup（Reveal / overflow：定位与
@@ -958,21 +954,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
             controls.leadingAnchor.constraint(greaterThanOrEqualTo: titleStack.trailingAnchor, constant: 12),
             controls.trailingAnchor.constraint(equalTo: headerView.trailingAnchor, constant: -14),
-            controls.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
-
-            copyContentButton.widthAnchor.constraint(equalToConstant: 30),
-            copyNameButton.widthAnchor.constraint(equalToConstant: 30),
-            copyAbsPathButton.widthAnchor.constraint(equalToConstant: 30),
-            copyRelPathButton.widthAnchor.constraint(equalToConstant: 30),
-            revealButton.widthAnchor.constraint(equalToConstant: 30),
-            overflowButton.widthAnchor.constraint(equalToConstant: 30),
-
-            copyContentButton.heightAnchor.constraint(equalToConstant: 24),
-            copyNameButton.heightAnchor.constraint(equalToConstant: 24),
-            copyAbsPathButton.heightAnchor.constraint(equalToConstant: 24),
-            copyRelPathButton.heightAnchor.constraint(equalToConstant: 24),
-            revealButton.heightAnchor.constraint(equalToConstant: 24),
-            overflowButton.heightAnchor.constraint(equalToConstant: 24)
+            controls.centerYAnchor.constraint(equalTo: headerView.centerYAnchor)
         ])
     }
 
@@ -2988,15 +2970,32 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
-    private func configureIconButton(_ button: HoverButton, symbol: String, tooltip: String, action: Selector) {
-        button.title = ""
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip)
-        button.imagePosition = .imageOnly
+    /// 顶栏动作按钮：图标在上、9pt 文字在下。图标来自 `ToolbarIcon`，六颗同网格自绘、外接框
+    /// 相同，图标与文字因此各自落在同一条线上。高 36（顶栏 50pt，上下各留 7pt），宽取文字宽
+    /// 加左右各 6pt 内边距、下限 34，这样悬停底不贴字。
+    private func configureIconButton(
+        _ button: HoverButton,
+        icon: ToolbarIcon,
+        caption: String,
+        tooltip: String,
+        action: Selector
+    ) {
+        button.caption = caption
+        button.image = icon.image
+        button.imagePosition = .imageAbove
         button.setButtonType(.momentaryChange)
         button.toolTip = tooltip
         button.target = self
         button.action = action
         button.prepareHoverAppearance()
+
+        let captionWidth = (caption as NSString)
+            .size(withAttributes: [.font: NSFont.systemFont(ofSize: 9)]).width
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: ceil(max(34, captionWidth + 12))),
+            button.heightAnchor.constraint(equalToConstant: 36)
+        ])
     }
 
     /// 6 个动作 button（4 copy + reveal + overflow）随文件加载状态统一启用/禁用；

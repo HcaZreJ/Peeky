@@ -86,7 +86,7 @@ brew upgrade --cask peeky
   当前正在预览的文件被外部改写时，正文就地更新且停在原来的滚动位置（markdown 与非 markdown 两条路径都要看）；
   切到另一个 tab 再切回来，期间被改写的内容在切回的那一刻落地。无树根（空窗口）时 View 菜单的 Refresh from Disk 置灰。
 - 顶栏按钮逐个 hover：出浅底并浮出 tooltip，浅色深色下浅底都看得见；打开非 repo 内的文件时「复制相对路径」明显变暗。tab 卡片上的 × 与 Close All 同样有浅底。
-- 顶栏 6 个图标按钮成组停在窗口右端，拖宽窗口时保持成组、不被拉开；标题过长时中段省略，按钮组位置不动。
+- 顶栏 6 个按钮成组停在窗口右端，拖宽窗口时保持成组、不被拉开；标题过长时中段省略，按钮组位置不动。六颗的图标与 Content / Name / Full path / Rel path / Finder / More 六行文字在浅色深色下都读得清。
 - markdown 文件下打开 ⋯ 菜单，Wrap Lines 置灰；切到源码 / JSON 文件后它恢复可用且勾选态正确。
 - `<py / ts / yaml …>` 打开后应显示 Dark Modern 主题高亮，深色背景统一；选中 ⌘C 可复制；⌘E 打开系统默认编辑器并跳到当前行。
 - `.app` bundle 打包后，执行 `open "peeky://open?path=...&line=N"` 应打开正式版 Peeky 并定位到指定行；`open "peeky-dev://open?path=...&line=N"` 应打开本地 dev 版。
