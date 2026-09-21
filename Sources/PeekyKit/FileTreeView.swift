@@ -285,6 +285,50 @@ final class FileTreeView: NSView {
         heightConstraint.constant = CGFloat(rows) * outlineView.rowHeight
     }
 
+    private func guideColumns(
+        for node: FileTreeNode,
+        activeAncestor: FileTreeNode?
+    ) -> [FileTreeIndentGuide.Column] {
+        FileTreeIndentGuide.columns(
+            ancestors: ancestors(of: node),
+            activeAncestor: activeAncestor,
+            indent: outlineView.indentationPerLevel
+        )
+    }
+
+    private func ancestors(of node: FileTreeNode) -> [FileTreeNode] {
+        var chain: [FileTreeNode] = []
+        var cursor = outlineView.parent(forItem: node) as? FileTreeNode
+        while let current = cursor {
+            chain.append(current)
+            cursor = outlineView.parent(forItem: current) as? FileTreeNode
+        }
+        return chain.reversed()
+    }
+
+    private func activeGuideAncestor() -> FileTreeNode? {
+        let row = outlineView.selectedRow
+        guard row >= 0, let selected = outlineView.item(atRow: row) as? FileTreeNode else { return nil }
+        return FileTreeIndentGuide.activeAncestor(
+            selected: selected,
+            parent: outlineView.parent(forItem: selected) as? FileTreeNode
+        )
+    }
+
+    /// 选中换行时整屏的活动列都要重算——亮的是哪一列取决于选中行，不取决于行自己。
+    private func refreshGuideColumns() {
+        let active = activeGuideAncestor()
+        for row in 0..<outlineView.numberOfRows {
+            guard
+                let rowView = outlineView.rowView(atRow: row, makeIfNecessary: false) as? FileTreeRowView,
+                let node = outlineView.item(atRow: row) as? FileTreeNode
+            else {
+                continue
+            }
+            rowView.guideColumns = guideColumns(for: node, activeAncestor: active)
+        }
+    }
+
     @objc private func rowClicked() {
         let row = outlineView.clickedRow
         guard
@@ -368,13 +412,34 @@ extension FileTreeView: NSOutlineViewDelegate {
         }
 
         cell.textField?.stringValue = node.name
+        cell.textField?.font = NSFont.systemFont(ofSize: 12, weight: node.isDirectory ? .medium : .regular)
         cell.textField?.textColor = node.isErrorPlaceholder ? .secondaryLabelColor : .labelColor
         cell.imageView?.image = NSImage(
-            systemSymbolName: node.isErrorPlaceholder ? "exclamationmark.triangle" : (node.isDirectory ? "folder" : "doc.text"),
+            systemSymbolName: node.isErrorPlaceholder ? "exclamationmark.triangle" : (node.isDirectory ? "folder.fill" : "doc.text"),
             accessibilityDescription: nil
         )
 
         return cell
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
+        guard let node = item as? FileTreeNode else { return nil }
+
+        let identifier = NSUserInterfaceItemIdentifier("FileTreeRowView")
+        let rowView: FileTreeRowView
+        if let reused = outlineView.makeView(withIdentifier: identifier, owner: self) as? FileTreeRowView {
+            rowView = reused
+        } else {
+            rowView = FileTreeRowView()
+            rowView.identifier = identifier
+        }
+
+        rowView.guideColumns = guideColumns(for: node, activeAncestor: activeGuideAncestor())
+        return rowView
+    }
+
+    func outlineViewSelectionDidChange(_ notification: Notification) {
+        refreshGuideColumns()
     }
 
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
@@ -399,5 +464,32 @@ extension FileTreeView: NSOutlineViewDelegate {
 
     func outlineViewItemDidCollapse(_ notification: Notification) {
         updateHeight()
+    }
+}
+
+/// 文件树的行：在系统行背景之上画缩进导轨。
+/// 选中行整行高亮，其导轨被 `drawSelection` 覆盖——高亮本身已经答了「我在哪」。
+final class FileTreeRowView: NSTableRowView {
+    private static let lineWidth: CGFloat = 1
+
+    var guideColumns: [FileTreeIndentGuide.Column] = [] {
+        didSet {
+            guard guideColumns != oldValue else { return }
+            needsDisplay = true
+        }
+    }
+
+    override func drawBackground(in dirtyRect: NSRect) {
+        super.drawBackground(in: dirtyRect)
+
+        guard !guideColumns.isEmpty else { return }
+        let appearance = PeekyTheme.resolveAppearance(effectiveAppearance)
+        let inactive = PeekyTheme.color(.treeIndentGuide, appearance: appearance)
+        let active = PeekyTheme.color(.gutterDisclosure, appearance: appearance)
+
+        for column in guideColumns {
+            (column.isActive ? active : inactive).setFill()
+            NSRect(x: column.x, y: 0, width: Self.lineWidth, height: bounds.height).fill()
+        }
     }
 }

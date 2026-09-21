@@ -36,6 +36,8 @@ enum PeekyTheme {
         case statusBarText
         /// gutter 折叠三角
         case gutterDisclosure
+        /// 侧栏文件树的缩进导轨：非活动列。活动列复用 `.gutterDisclosure`。
+        case treeIndentGuide
     }
 
     // MARK: - Palette（配色常量表，换配色只改这里）
@@ -61,6 +63,7 @@ enum PeekyTheme {
         .statusBarBackground: "#181818",
         .statusBarText: "#CCCCCC",
         .gutterDisclosure: "#A0A0A0",
+        .treeIndentGuide: "#585858",
     ]
 
     /// light：GitHub Light
@@ -84,6 +87,7 @@ enum PeekyTheme {
         .statusBarBackground: "#F6F8FA",
         .statusBarText: "#424A53",
         .gutterDisclosure: "#656D76",
+        .treeIndentGuide: "#A9A9A9",
     ]
 
     // MARK: - API
