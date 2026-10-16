@@ -19,7 +19,8 @@ expand_path() {
   if [[ "$p" == "~" ]]; then
     p="$HOME"
   elif [[ "$p" == "~/"* ]]; then
-    p="$HOME/${p#~/}"
+    # 模式里的 ~ 必须加引号,否则 bash 先把它展开成 $HOME,前缀永远匹配不上。
+    p="$HOME/${p#"~/"}"
   fi
   if [[ "$p" != /* ]]; then
     if [[ "$p" == "." ]]; then
@@ -92,7 +93,11 @@ if [[ ! -e "$abs_arg" ]]; then
 fi
 
 if [[ ! -e "$target" ]]; then
-  echo "peek: no such path: $raw_arg" >&2
+  # 报展开后的完整路径:相对路径拼错目录时,用户一眼能看出是在哪找的。
+  echo "peek: no such path: $abs_arg" >&2
+  if [[ "$raw_arg" != /* && "$raw_arg" != "~"* ]]; then
+    echo "peek: relative paths start from the current directory ($PWD); use ~/... or /... to open from anywhere" >&2
+  fi
   exit 1
 fi
 
