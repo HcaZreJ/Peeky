@@ -5,6 +5,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var windows: [PreviewWindowController] = []
     private var editMenu: NSMenu?
     private var copyRelativePathMenuItem: NSMenuItem?
+    private var openRecentMenu: NSMenu?
+    /// 最近打开的文件，最新在前；跨重启保存在 UserDefaults（见 loadRecentFiles / saveRecentFiles）。
+    /// 在构造时就读出：冷启动时命令行参数、Finder 与 peeky:// 送来的文件早于 didFinishLaunching 到达，
+    /// 那时还没读的话，第一条记录会存进空列表，把上次的列表整个冲掉。
+    private var recentFiles: [RecentFiles.Entry] = AppDelegate.loadRecentFiles()
+
+    private static let recentFilesDefaultsKey = "PeekyRecentFiles"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 启动早期后台预热高亮引擎（eval bundle + init + 空 tokenize）：非阻塞，
@@ -75,6 +82,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let openItem = NSMenuItem(title: "Open...", action: #selector(openDocument(_:)), keyEquivalent: "o")
         openItem.target = self
         fileMenu.addItem(openItem)
+
+        let openRecentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        let openRecentMenu = NSMenu(title: "Open Recent")
+        openRecentMenu.delegate = self
+        openRecentItem.submenu = openRecentMenu
+        fileMenu.addItem(openRecentItem)
+        self.openRecentMenu = openRecentMenu
         fileMenu.addItem(.separator())
 
         let closeFileItem = NSMenuItem(
@@ -168,6 +182,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     /// 弹出前隐藏「复制相对路径」——当前活跃文件不在任何 repo 内时该项不出现。
     func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu === openRecentMenu {
+            rebuildOpenRecentMenu(menu)
+            return
+        }
         guard menu === editMenu else { return }
 
         let showRelativePath: Bool
@@ -317,6 +335,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         controller.onOpenRequested = { [weak self] in
             self?.showOpenPanel()
         }
+        controller.onFileOpened = { [weak self] url in
+            self?.recordRecentFile(url)
+        }
+        controller.recentFileItems = { [weak self] in
+            self?.recentFileItems() ?? []
+        }
+        controller.onClearRecentFiles = { [weak self] in
+            self?.clearRecentFiles()
+        }
         controller.onURLsDropped = { [weak self] urls in
             self?.open(urls: urls)
         }
@@ -325,6 +352,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             self?.windows.removeAll { $0 === controller }
         }
         windows.append(controller)
+        controller.recentFilesDidChange()
         return controller
+    }
+
+    // MARK: - 最近打开的文件（File > Open Recent 与空白窗口共用一份列表）
+
+    private func rebuildOpenRecentMenu(_ menu: NSMenu) {
+        RecentFilesMenu.populate(
+            menu,
+            with: recentFileItems(),
+            target: self,
+            openAction: #selector(openRecentFileAction(_:)),
+            clearAction: #selector(clearRecentFilesAction(_:))
+        )
+    }
+
+    /// 此刻的显示条目：每条能否打开在这里现查磁盘。
+    private func recentFileItems() -> [RecentFiles.Item] {
+        RecentFiles.items(
+            for: recentFiles,
+            pathExists: FileManager.default.fileExists(atPath:),
+            homePath: NSHomeDirectory(),
+            now: Date()
+        )
+    }
+
+    /// 菜单展开之后文件才消失时，什么都不开；下次展开菜单它已置灰。
+    @objc private func openRecentFileAction(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String,
+              FileManager.default.fileExists(atPath: path) else { return }
+        open(requests: [OpenRequest(url: URL(fileURLWithPath: path))])
+    }
+
+    @objc private func clearRecentFilesAction(_ sender: Any?) {
+        clearRecentFiles()
+    }
+
+    private func clearRecentFiles() {
+        recentFiles = []
+        Self.saveRecentFiles(recentFiles)
+        windows.forEach { $0.recentFilesDidChange() }
+    }
+
+    private func recordRecentFile(_ url: URL) {
+        let entry = RecentFiles.Entry(
+            path: url.standardizedFileURL.path,
+            openedAt: Date(),
+            origin: Self.origin(of: url)
+        )
+        recentFiles = RecentFiles.recording(entry, into: recentFiles)
+        Self.saveRecentFiles(recentFiles)
+        windows.forEach { $0.recentFilesDidChange() }
+    }
+
+    /// 打开那一刻文件的来源。仓库根下的 `.git` 是文件（worktree / 子模块）才读得出内容；
+    /// 是目录（普通仓库）或用的是 .hg / .svn 时读取失败，按主检出处理。
+    private static func origin(of url: URL) -> RecentFiles.Origin {
+        let root = RepoRoot.discover(from: url)
+        let gitFileContents = root.flatMap {
+            try? String(contentsOf: $0.appendingPathComponent(".git"), encoding: .utf8)
+        }
+        return RecentFiles.origin(rootPath: root?.path, gitFileContents: gitFileContents)
+    }
+
+    private static func loadRecentFiles() -> [RecentFiles.Entry] {
+        guard let data = UserDefaults.standard.data(forKey: recentFilesDefaultsKey),
+              let entries = try? JSONDecoder().decode([RecentFiles.Entry].self, from: data) else {
+            return []
+        }
+        return entries
+    }
+
+    private static func saveRecentFiles(_ entries: [RecentFiles.Entry]) {
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        UserDefaults.standard.set(data, forKey: recentFilesDefaultsKey)
     }
 }

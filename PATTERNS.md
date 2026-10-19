@@ -2,7 +2,7 @@
 
 ## Functional-core / 静态命名空间约定
 - 格式化、解析、渲染决策一律做成**无状态 `enum` 命名空间 + 静态纯函数**（`JSONFormatter`、`MarkdownRenderer`、`XMLFormatter`、`SyntaxHighlighter`、`PreviewRenderer`），输入到输出确定，方便按 visible / hidden 双层测试。
-- 有状态代码集中在两处：`AppDelegate`（窗口数组、生命周期）与 `PreviewWindowController`（tab 状态 + AppKit 接线）。新增交互 UI 挂在 `PreviewWindowController` 下；新增格式转换器写成叶子纯函数模块。
+- 有状态代码集中在两处：`AppDelegate`（窗口数组、生命周期、最近文件列表）与 `PreviewWindowController`（tab 状态 + AppKit 接线）。新增交互 UI 挂在 `PreviewWindowController` 下；新增格式转换器写成叶子纯函数模块。
 - `PreviewRenderer` 是"决策层"：选 Raw / Formatted 路径、执行性能预算降级、委派给叶子模块；不处理视图几何。
 
 ## 视图约定
@@ -18,6 +18,7 @@
 - **FSEvents 服务约定**（`DirectoryWatcher`）：每窗口一个实例盯当前树根，`kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagNoDefer` + 0.4s latency 让单次保存立刻送达、批量写入合并成个位数次回调；C 回调在私有后台队列上只做取路径与取 flag，回主线程再交给控制器；换树根时先停旧 stream，`windowWillClose` 撤监听。
 - **JSC 服务约定**（以 `HighlightService` 为参照实现）：JSContext 单例 + 私有串行队列承载所有 JS 执行；预算与合法性检查在 Swift 侧前置，不进入 JS；任何 bundle 缺失或 JS 异常一律永久降级返回 nil，加一条一次性日志，运行不中断；资源寻径包含多个候选（`.app` 的 `Contents/Resources` 与 `swift build` 输出目录），寻径失败同样降级。
 - **自绘视图必须设置 `clipsToBounds = true`**：macOS 14 起 NSView 默认不裁剪，`draw(_:)` 收到的 dirtyRect 可能远大于 bounds（窗口首帧为整窗），`fill(dirtyRect)` 会把背景涂到兄弟视图上（表现为兄弟视图"空白"，且 resize 之后也不恢复）。
+- **随内容伸缩的视图，凡经约束链连到窗口尺寸的优先级一律低于 500**：NSWindow 有一条「保持当前尺寸」的隐式约束，优先级 500，任何高于它的约束（理想宽 / 理想高的等式、标签的抗压缩）都会把窗口撑大，而不是让内容收窄、截断或滚动。链条常常隐蔽：滚动区里行内标签的抗压缩 → 行宽 → documentView 宽 = clipView 宽 → scrollView → 外层容器 → 窗口。空白窗口的最近文件列表（`RecentFilesSectionView`）因此把理想宽、理想高与行内抗压缩全部定在 480–499；验收时让 app 自己跑完一轮布局再读 `window.frame`，调试器 `setContentSize` 之后立刻读到的是被强行压窄的假状态。
 - **textView 的换行和不换行两个分支都必须显式设置 `maxSize = greatestFiniteMagnitude`**：NSTextView 的 frame 增长通过 `setConstrainedFrameSize` 驱动，被钳制在 maxSize 内，而默认 maxSize 等于初始 frame（视口大小）；若未显式放开，长文档的 frame 无法超过视口高度，scrollView 就没有可滚动区域（`applyLineWrapping` 两个分支都已设置）。
 - **文档布局由渲染管线主动驱动**：macOS 26 上 TextKit1 的惰性布局不会自行推进；`PreviewWindowController.startLayoutPump()` 在内容或换行模式变化后，在主线程分片调用 `ensureLayout`（每次处理 64k 字符，用 `main.async` 让出 runloop），frame 逐步增高，交互不阻塞。gutter 与 overlay 绘制不触发额外布局（使用 `withoutAdditionalLayout` 变体），只读已就绪数据；程序化跳转（`scrollToLine` 等）在 `scrollRangeToVisible` 之前先对目标 range 调用 `ensureLayout`。
 - **配色集中在 `PeekyTheme`**：浅色与深色两套语义 palette 在文件顶部由两张 `[ThemeColor: hex]` 常量表定义，渲染代码按语义 token（`jsonString` / `jsonKey` / `editorBackground` 等）取色，不写死具体颜色；换配色时只改常量。编辑器主题分三条路径（`applyEditorTheme`）：`followsSystemAppearance`（JSON / JSONL）设 appearance 为 nil 跟随系统，背景 / 全文基础前景 / gutter / 坏行经 `resolveAppearance(effectiveAppearance)` 取色，系统明暗切换通过 `DropTextView.onEffectiveAppearanceChanged` 回调重刷可视区；`usesDarkModernTheme`（源码 shiki）锁定为 darkAqua；其它情况使用 `.textBackgroundColor`。
