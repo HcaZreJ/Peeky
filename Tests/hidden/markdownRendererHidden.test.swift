@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import PeekyKit
+@testable import PeekyCore
 
 @Suite("Hidden_markdownRenderer")
 struct Hidden_markdownRenderer {

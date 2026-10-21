@@ -27,9 +27,9 @@ if [[ -n "${PEEKY_VERSION:-}" ]]; then
   /usr/bin/plutil -replace CFBundleVersion -string "$PEEKY_VERSION" "$APP_DIR/Contents/Info.plist"
 fi
 
-# SwiftPM copies PeekyKit's declared resources (shiki-bundle.js) into a
-# `Peeky_PeekyKit.bundle` next to the release binary. HighlightService's
-# loadBundleSource() looks for it under Bundle.main.resourceURL first
+# SwiftPM copies PeekyCore's declared resources (shiki-bundle.js,
+# github-markdown.css) into a `Peeky_PeekyCore.bundle` next to the release
+# binary. CoreResources looks for it under Bundle.main.resourceURL first
 # (standard .app layout: Contents/Resources), so it ships there — keeping
 # the .app root clean for codesign (no "unsealed contents" warning).
 for resource_bundle in "$ROOT_DIR"/.build/release/*.bundle; do

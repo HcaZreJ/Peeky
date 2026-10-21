@@ -8,7 +8,7 @@ import Foundation
 ///
 /// `@unchecked Sendable` 的依据：`stream` 只在主线程读写（`watch` / `stop` 都由窗口控制器
 /// 在主线程调用），C 回调只读不可变的 `onChange`。
-final class DirectoryWatcher: @unchecked Sendable {
+package final class DirectoryWatcher: @unchecked Sendable {
     /// 系统把这段时间内的事件合并成一次回调。0.4s 让 `npm install` 级别的密集写入收敛成
     /// 个位数次刷新，同时手感上仍然是「刚存完就出现」。
     private static let latency: CFTimeInterval = 0.4
@@ -17,7 +17,7 @@ final class DirectoryWatcher: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.peeky.directory-watcher")
     private var stream: FSEventStreamRef?
 
-    init(onChange: @escaping @Sendable ([String], Bool) -> Void) {
+    package init(onChange: @escaping @Sendable ([String], Bool) -> Void) {
         self.onChange = onChange
     }
 
@@ -26,7 +26,7 @@ final class DirectoryWatcher: @unchecked Sendable {
     }
 
     /// 监听 root 及其子树；重复调用先停掉上一个 stream，一个 watcher 同时只盯一棵树。
-    func watch(root: URL) {
+    package func watch(root: URL) {
         teardown()
 
         var context = FSEventStreamContext(
@@ -75,7 +75,7 @@ final class DirectoryWatcher: @unchecked Sendable {
         stream = created
     }
 
-    func stop() {
+    package func stop() {
         teardown()
     }
 

@@ -3,19 +3,19 @@ import JavaScriptCore
 import os
 
 /// 单个高亮 token：文本片段 + 前景色（#rrggbb，小写十六进制）。
-struct HighlightedToken: Equatable {
-    var text: String
-    var colorHex: String
+package struct HighlightedToken: Equatable {
+    package var text: String
+    package var colorHex: String
 }
 
 /// 一行的 token 序列（token.text 依序拼接 == 该行原文，不含换行符）。
-typealias HighlightedLine = [HighlightedToken]
+package typealias HighlightedLine = [HighlightedToken]
 
 /// 分块产出的连续行区间。
-struct HighlightChunk: Equatable {
+package struct HighlightChunk: Equatable {
     /// 0-based 起始行号
-    var firstLine: Int
-    var lines: [HighlightedLine]
+    package var firstLine: Int
+    package var lines: [HighlightedLine]
 }
 
 /// `highlightStream` 的取消标志：`continuation.onTermination`（任意线程）与
@@ -39,19 +39,19 @@ private final class StreamCancellationFlag: @unchecked Sendable {
 
 /// JSC+Shiki 高亮服务：JSContext 单例 + 后台串行队列。
 /// 引擎故障/超预算/未知语言一律返回 nil（调用方纯文本回退），不抛错不崩溃。
-final class HighlightService: @unchecked Sendable {
-    static let shared = HighlightService()
+package final class HighlightService: @unchecked Sendable {
+    package static let shared = HighlightService()
 
     /// 高亮预算（UTF-16 code unit 数），超限返回 nil
-    static let maxUTF16Length = 1_500_000
+    public static let maxUTF16Length = PreviewBudget.highlightLimit
 
     /// 扩展名（小写、不含点）→ shiki language id；不支持返回 nil
-    static func language(forExtension ext: String) -> String? {
+    package static func language(forExtension ext: String) -> String? {
         extensionToLanguage[ext.lowercased()]
     }
 
     /// 启动预热（eval bundle + 引擎 init + 空 tokenize），幂等，后台执行。
-    func warmUp() {
+    package func warmUp() {
         queue.async { [self] in
             guard !hasWarmedUp else { return }
             hasWarmedUp = true
@@ -62,7 +62,7 @@ final class HighlightService: @unchecked Sendable {
     }
 
     /// 全量高亮。返回行数与输入行数一致（text 按 \n 切分）。
-    func highlight(text: String, language: String) async -> [HighlightedLine]? {
+    package func highlight(text: String, language: String) async -> [HighlightedLine]? {
         guard text.utf16.count <= Self.maxUTF16Length else { return nil }
         guard Self.supportedLanguages.contains(language) else { return nil }
 
@@ -84,7 +84,7 @@ final class HighlightService: @unchecked Sendable {
     /// 置位一个线程安全的取消标志；producer 在共享串行队列上每个 chunk 开始前
     /// 检查该标志，一旦置位立即 return，不再进 JS 引擎 tokenize 剩余内容，
     /// 避免为已放弃的文档白白跑满全文并阻塞队列上后续请求。
-    func highlightStream(text: String, language: String) -> AsyncStream<HighlightChunk>? {
+    package func highlightStream(text: String, language: String) -> AsyncStream<HighlightChunk>? {
         guard text.utf16.count <= Self.maxUTF16Length else { return nil }
         guard Self.supportedLanguages.contains(language) else { return nil }
 
@@ -213,28 +213,10 @@ final class HighlightService: @unchecked Sendable {
         return true
     }
 
-    /// `Bundle.module` fatalError 时找不到资源，与本服务"永不崩溃只降级"的
-    /// 契约冲突，因此手写多候选寻径：标准 .app 布局（Contents/Resources）
-    /// 与裸可执行文件布局（swift build / PeekyTests：bundle 与二进制同级）
-    /// 依次尝试，全部落空则返回 nil，交由调用方走既有降级路径。
+    /// 寻径见 `CoreResources`；找不到返回 nil，交由调用方走既有降级路径。
     private func loadBundleSource() -> String? {
-        let bundleName = "Peeky_PeekyKit.bundle"
-        var candidateURLs: [URL] = []
-
-        if let resourceURL = Bundle.main.resourceURL {
-            candidateURLs.append(resourceURL.appendingPathComponent(bundleName))
-        }
-        candidateURLs.append(Bundle.main.bundleURL.appendingPathComponent(bundleName))
-
-        for candidateURL in candidateURLs {
-            guard let resourceBundle = Bundle(url: candidateURL) else { continue }
-            guard let scriptURL = resourceBundle.url(forResource: "shiki-bundle", withExtension: "js") else { continue }
-            if let source = try? String(contentsOf: scriptURL, encoding: .utf8) {
-                return source
-            }
-        }
-
-        return nil
+        guard let scriptURL = CoreResources.url(forResource: "shiki-bundle", withExtension: "js") else { return nil }
+        return try? String(contentsOf: scriptURL, encoding: .utf8)
     }
 
     private func runInit(on context: JSContext) -> Bool {

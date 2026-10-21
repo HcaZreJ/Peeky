@@ -1,4 +1,5 @@
 import AppKit
+import PeekyCore
 
 @MainActor
 enum FileDropSupport {

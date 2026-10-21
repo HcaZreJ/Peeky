@@ -1,23 +1,28 @@
-import AppKit
 import Foundation
 
-struct PreviewGutterMarker {
-    let characterLocation: Int
-    let label: String
-    let isWarning: Bool
+package struct PreviewGutterMarker {
+    package let characterLocation: Int
+    package let label: String
+    package let isWarning: Bool
+
+    package init(characterLocation: Int, label: String, isWarning: Bool) {
+        self.characterLocation = characterLocation
+        self.label = label
+        self.isWarning = isWarning
+    }
 }
 
-enum PreviewGutterMode {
+package enum PreviewGutterMode {
     case hidden
     case lineNumbers(lineStartLocations: [Int])
     case markers([PreviewGutterMarker])
 }
 
-struct PreviewGutterConfiguration {
-    let mode: PreviewGutterMode
-    let width: CGFloat
+package struct PreviewGutterConfiguration {
+    package let mode: PreviewGutterMode
+    package let width: CGFloat
 
-    var isVisible: Bool {
+    package var isVisible: Bool {
         switch mode {
         case .hidden:
             false
@@ -26,9 +31,9 @@ struct PreviewGutterConfiguration {
         }
     }
 
-    static let hidden = PreviewGutterConfiguration(mode: .hidden, width: 0)
+    package static let hidden = PreviewGutterConfiguration(mode: .hidden, width: 0)
 
-    static func lineNumbers(for text: String) -> PreviewGutterConfiguration {
+    package static func lineNumbers(for text: String) -> PreviewGutterConfiguration {
         let starts = PreviewDisplayMetadata.lineStartLocations(in: text)
         return PreviewGutterConfiguration(
             mode: .lineNumbers(lineStartLocations: starts),
@@ -36,7 +41,7 @@ struct PreviewGutterConfiguration {
         )
     }
 
-    static func markers(_ markers: [PreviewGutterMarker]) -> PreviewGutterConfiguration {
+    package static func markers(_ markers: [PreviewGutterMarker]) -> PreviewGutterConfiguration {
         guard !markers.isEmpty else { return .hidden }
         let maxLabelLength = markers.map(\.label.count).max() ?? 2
         return PreviewGutterConfiguration(
@@ -50,30 +55,34 @@ struct PreviewGutterConfiguration {
     }
 }
 
-struct PreviewTextOverlayConfiguration {
-    let recordSeparatorLocations: [Int]
+package struct PreviewTextOverlayConfiguration {
+    package let recordSeparatorLocations: [Int]
 
-    static let hidden = PreviewTextOverlayConfiguration(
+    package init(recordSeparatorLocations: [Int]) {
+        self.recordSeparatorLocations = recordSeparatorLocations
+    }
+
+    package static let hidden = PreviewTextOverlayConfiguration(
         recordSeparatorLocations: []
     )
 }
 
-struct PreviewDisplayMetadata {
-    let gutter: PreviewGutterConfiguration
-    let textOverlay: PreviewTextOverlayConfiguration
-    let targetLocationsByOriginalLine: [Int: Int]
+package struct PreviewDisplayMetadata {
+    package let gutter: PreviewGutterConfiguration
+    package let textOverlay: PreviewTextOverlayConfiguration
+    package let targetLocationsByOriginalLine: [Int: Int]
     /// JSONL 坏行在输出文本中的 UTF-16 区间；PreviewWindowController 据此用
     /// `PeekyTheme.invalidLine*`（跟随系统外观）给坏行正文上红。非 JSONL 为空。
-    let invalidRecordRanges: [NSRange]
+    package let invalidRecordRanges: [NSRange]
 
-    static let plain = PreviewDisplayMetadata(
+    package static let plain = PreviewDisplayMetadata(
         gutter: .hidden,
         textOverlay: .hidden,
         targetLocationsByOriginalLine: [:],
         invalidRecordRanges: []
     )
 
-    static func lineNumbers(for text: String) -> PreviewDisplayMetadata {
+    package static func lineNumbers(for text: String) -> PreviewDisplayMetadata {
         PreviewDisplayMetadata(
             gutter: .lineNumbers(for: text),
             textOverlay: PreviewTextOverlayConfiguration(
@@ -84,7 +93,7 @@ struct PreviewDisplayMetadata {
         )
     }
 
-    static func jsonLines(text: String, records: [JSONLineRecord]) -> PreviewDisplayMetadata {
+    package static func jsonLines(text: String, records: [JSONLineRecord]) -> PreviewDisplayMetadata {
         let markers = records.map {
             PreviewGutterMarker(
                 characterLocation: $0.range.location,
@@ -105,7 +114,7 @@ struct PreviewDisplayMetadata {
         )
     }
 
-    static func lineStartLocations(in text: String) -> [Int] {
+    package static func lineStartLocations(in text: String) -> [Int] {
         let nsText = text as NSString
         guard nsText.length > 0 else { return [0] }
 

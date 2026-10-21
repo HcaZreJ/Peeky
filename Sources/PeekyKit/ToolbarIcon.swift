@@ -1,4 +1,5 @@
 import AppKit
+import PeekyCore
 
 /// 顶栏六颗动作按钮的图标，画在同一个网格上。
 ///

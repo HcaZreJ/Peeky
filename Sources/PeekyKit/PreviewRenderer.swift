@@ -1,4 +1,5 @@
 import AppKit
+import PeekyCore
 import Foundation
 
 enum PreviewMode: Int {
@@ -58,7 +59,7 @@ struct RenderedPreview {
 }
 
 enum PreviewRenderer {
-    private static let richFormatLimit = 8 * 1024 * 1024
+    private static let richFormatLimit = PreviewBudget.richFormatLimit
 
     static func render(
         document: LoadedText,

@@ -2,6 +2,7 @@ import AppKit
 import Testing
 
 @testable import PeekyKit
+@testable import PeekyCore
 
 // MARK: - 颜色比较辅助（sRGB 相对亮度：0.2126R + 0.7152G + 0.0722B，忽略 alpha）
 

@@ -35,13 +35,14 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 - `FileTreeNode { url, name, isDirectory, isErrorPlaceholder, childrenLoaded, children }`：文件树节点。`reconcile(existing:entries:)` 把磁盘最新一级列表对账进已缓存的子项——次序跟随 `entries`，URL 未变的条目复用原节点实例（`NSOutlineView` 按实例记展开态，换实例会把展开的子树折回去），新 URL 建新节点，磁盘上消失的丢弃
 - `FileTreeRefresh.Scope { directoriesToReload, touchesActiveFile }`：一次磁盘变化要触发的刷新范围。`scope(changedPaths:mustScanSubDirectories:loadedDirectories:activeFileURL:)` 是纯路径运算，路径比较前统一解析 symlink、剥前导 `/private`、去尾斜杠
 - `RenderedPreview { attributedText, note, outline, display, highlightLanguage?, usesJSONHighlighting, followsSystemAppearance, jsonStructureIsValid }`：`PreviewRenderer` 的输出。`highlightLanguage` 非 nil 表示走 shiki 高亮（Dark Modern）；`usesJSONHighlighting` 为 true 表示 JSON / JSONL 走可视区惰性词法高亮；`followsSystemAppearance` 为 true 表示编辑器区通过 `PeekyTheme` 跟随系统明暗；`jsonStructureIsValid` 为 true 表示源文本是结构解析成功的 JSON，控制器据此决定是否建立 `JSONPathMap` 路径索引
-- `PeekyTheme`：两套语义 palette（浅色 GitHub Light、深色 VS Code Dark Modern），`ThemeColor` 枚举 × hex 常量表，换色只改常量；`resolveAppearance(NSAppearance?)` 将系统外观映射到对应 palette
+- `PeekyPalette`（PeekyCore）：两套语义 palette（浅色 GitHub Light、深色 VS Code Dark Modern），`ThemeColor` 枚举 × hex 常量表，换色只改常量；`hex(_:appearance:)` 取 hex，`rgba(fromHex:)` 解析为 0–255 分量。`PeekyTheme`（PeekyKit）把它转成 NSColor，`resolveAppearance(NSAppearance?)` 将系统外观映射到对应 palette
 - `JSONHighlighter.JSONToken { kind, range }`（kind ∈ key / string / number / boolLiteral / nullLiteral / punctuation）：JSON 词法分析器，单遍扫描按 UTF-16 子范围 tokenize，为可视区惰性高亮提供 token
 - `HighlightedToken { text, colorHex }` / `HighlightedLine` / `HighlightChunk { firstLine, lines }`：`HighlightService` 的产物
 - `JSONLineRecord { originalLine, range, isInvalid, summary }`：JSONL 原文模式下每条记录的元数据
 - `JSONPathSegment`（key(String) / index(Int)）+ `JSONPathMap { nodes: [Node], lineNode: [Int32] }`：pretty JSON 文本的逐行节点路径索引。父指针树存储——`Node = { parent: Int32, segment }`，`lineNode` 每行一个节点下标（-1 为根），`path(line:)` 沿 parent 回溯物化。`build` 单遍 UTF-16 扫描；空行是 JSONL 记录边界（清栈隔离坏行），但空行紧跟 `{` / `[` 时属于空容器内部不清栈。`jqExpression` 产出可直接执行且可安全放进 shell 单引号的表达式（非标识符 key 走 `."..."`，单引号输出为 unicode 转义）；`dotPath` 产出 `users.0.user.phone`
 
 ## 模块地图（依赖自上而下）
+两个库 target：**PeekyCore**（不依赖 AppKit / WebKit：TextFileLoader、FileKind、OpenRequest、JSON 四件套、XMLFormatter、MarkdownRenderer、MarkdownHTMLRenderer、MarkdownLinkPolicy、HighlightService、RepoRoot、DirectoryLister、DirectoryWatcher、FileTreeNode、FileTreeRefresh、FileTreeIndentGuide、RecentFiles、LastModifiedText、PreviewDisplayMetadata、PeekyPalette、PreviewBudget、CoreResources，以及 shiki-bundle.js / github-markdown.css 资源）与 **PeekyKit**（其余 AppKit / WebKit 界面代码，依赖 PeekyCore）。PeekyCore 的类型对包内其它 target 以 `package` 访问级别可见。
 ```
 main → AppDelegate → { OpenRequest, PreviewWindowController, RecentFiles(最近文件列表的持有与持久化), RecentFilesMenu(Open Recent 子菜单条目) }
 PreviewWindowController(约 1.8k 行,唯一持有状态的 UI 控制器)
@@ -51,7 +52,7 @@ FileTreeView(NSOutlineView 惰性树) → FileTreeNode(节点 + reconcile) / Dir
 RecentFilesSectionView(空白窗口里的最近文件列表:EmptyStateGroup 装既有的 Peeky + Open File 与列表,宽 < 480 时每行改两行排)
 MarkdownHTMLRenderer(Markdown → HTML,交给 WebView);PreviewRenderer(非 Markdown 的路径选择与编排)
   → JSONFormatter / XMLFormatter / SyntaxHighlighter / MarkdownRenderer(大纲抽取 + 超 8 MB 时的兜底) / FileKind
-叶子纯函数模块:RecentFiles(记录去重截断 / 可用性三态 / 来源识别 / 显示文字) · JSONFormatter · JSONHighlighter · JSONPathMap(逐行节点路径索引 + jq/点分序列化) · PeekyTheme · MarkdownHTMLRenderer · MarkdownLinkPolicy(链接点击导航分流) · XMLFormatter · MarkdownRenderer · SyntaxHighlighter · RepoRoot · DirectoryLister · FileTreeRefresh(磁盘事件 → 刷新范围) · HoverTracking(悬停 tracking area 安装，保住系统的 tooltip 区) · ToolbarIcon(顶栏六颗图标同网格自绘，墨迹长边逐颗相同) · LastModifiedText(顶栏副标题里的「最后更改于」文案)
+叶子纯函数模块:RecentFiles(记录去重截断 / 可用性三态 / 来源识别 / 显示文字) · JSONFormatter · JSONHighlighter · JSONPathMap(逐行节点路径索引 + jq/点分序列化) · PeekyPalette(配色 hex 表) · PeekyTheme(PeekyPalette → NSColor) · PreviewBudget(三档性能预算常量) · MarkdownHTMLRenderer · MarkdownLinkPolicy(链接点击导航分流) · XMLFormatter · MarkdownRenderer · SyntaxHighlighter · RepoRoot · DirectoryLister · FileTreeRefresh(磁盘事件 → 刷新范围) · HoverTracking(悬停 tracking area 安装，保住系统的 tooltip 区) · ToolbarIcon(顶栏六颗图标同网格自绘，墨迹长边逐颗相同) · LastModifiedText(顶栏副标题里的「最后更改于」文案)
 服务单例:HighlightService(JSC + shiki-bundle,私有串行队列,资源缺失或 JS 异常时永久降级为纯文本)
 服务实例:DirectoryWatcher(FSEvents,每窗口一个,盯当前树根;后台队列收事件、回主线程交回调)
 ```
@@ -59,10 +60,10 @@ MarkdownHTMLRenderer(Markdown → HTML,交给 WebView);PreviewRenderer(非 Markd
 ## 关键约定
 - Markdown 渲染走 `WKWebView` + github-markdown.css；其它文件走 `NSTextView` + `NSAttributedString`。
 - JSON / JSONL 唯一渲染形态是缩进格式化文本 + `JSONHighlighter` 可视区惰性词法高亮 + 原生选中复制；交互模式对齐 codebeautify.org/jsonviewer 的 Ace code 视图，plan 见 `.claude/plans/json-viewer-parity.md`；工具栏按钮（compact / sort / transform / undo-redo）跟踪于 issues #21–#24。
-- 配色集中在 `PeekyTheme`，两套语义 palette（浅色 GitHub Light、深色 VS Code Dark Modern），换色只改 hex 常量，跟随系统明暗；已覆盖 JSON / JSONL 渲染区和 gutter，侧栏 / 源码 / Markdown 的主题统一仍在后续。
+- 配色集中在 `PeekyPalette`（hex 常量表，app 经 `PeekyTheme` 转 NSColor），两套语义 palette（浅色 GitHub Light、深色 VS Code Dark Modern），换色只改 hex 常量，跟随系统明暗；已覆盖 JSON / JSONL 渲染区和 gutter，侧栏 / 源码 / Markdown 的主题统一仍在后续。
 - Markdown 解析层用 `swiftlang/swift-markdown` `exact 0.8.0`，是本 repo 唯一的第三方 SPM 依赖。
-- 高亮引擎是 JavaScriptCore + shiki（`dark_modern` include 链在构建期扁平化）。产物 `Sources/PeekyKit/Resources/shiki-bundle.js` 由 esbuild 打包并 checked-in；运行期不需要 Node，高亮引擎本身不依赖 WebKit（Markdown 预览另外使用 WKWebView）。
+- 高亮引擎是 JavaScriptCore + shiki（`dark_modern` include 链在构建期扁平化）。产物 `Sources/PeekyCore/Resources/shiki-bundle.js` 由 esbuild 打包并 checked-in；运行期不需要 Node，高亮引擎本身不依赖 WebKit（Markdown 预览另外使用 WKWebView）。
 - 文件树的任何一次「与磁盘对账」都走 `FileTreeNode.reconcile`，复用 URL 未变的节点实例，展开态与选中行因此天然保住；`FileTreeView.reload(root:)` 只用于换树根。
 - 刷新范围由 `FileTreeRefresh.scope` 一处决定，`FileTreeView.loadedDirectoryURLs` 提供「哪些目录已经列过磁盘」这一事实。
-- 编辑功能超出范围（见 `.out-of-scope/file-editing.md`）；⌘E 用系统默认编辑器打开当前文件。
+- 编辑功能超出范围（见 `.out-of-scope/file-editing.md`）。
 - CLI 命令名 `peek`，app 与 repo 名沿用 Peeky；基线是 `main` 分支。

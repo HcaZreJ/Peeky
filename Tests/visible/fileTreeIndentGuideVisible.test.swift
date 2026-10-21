@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import PeekyKit
+@testable import PeekyCore
 
 private func makeNode(_ name: String, isDirectory: Bool = true) -> FileTreeNode {
     FileTreeNode(
