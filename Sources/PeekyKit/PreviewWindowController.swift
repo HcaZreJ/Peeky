@@ -876,7 +876,10 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         metaLabel.font = NSFont.systemFont(ofSize: 11)
         metaLabel.textColor = .secondaryLabelColor
-        metaLabel.lineBreakMode = .byTruncatingMiddle
+        // 副标题以最后更改时间开头，放不下时从尾部省略，时间那一段留到最后才被截。
+        // 抗压缩低于窗口「保持当前尺寸」的 500：否则这一行宁可把窗口撑宽也不省略自己。
+        metaLabel.lineBreakMode = .byTruncatingTail
+        metaLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         metaLabel.maximumNumberOfLines = 1
 
         let titleStack = NSStackView(views: [titleLabel, metaLabel])
@@ -1828,6 +1831,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
                 document: document,
                 mode: tab.mode,
                 targetLine: tab.targetLine,
+                modifiedAt: tab.stamp?.mtime,
                 tabID: tab.id
             )
         } else {
@@ -1841,11 +1845,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         document: LoadedText,
         mode: PreviewMode,
         targetLine: Int?,
+        modifiedAt: Date?,
         tabID: UUID
     ) {
         // markdown（≤8MB）走 WebView + 真 github-markdown-css；>8MB 落下方原生 raw 兜底。
         if document.kind == .markdown && document.readBytes <= 8 * 1024 * 1024 {
-            renderMarkdownWeb(document: document, targetLine: targetLine)
+            renderMarkdownWeb(document: document, targetLine: targetLine, modifiedAt: modifiedAt)
             return
         }
 
@@ -1898,6 +1903,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         ].joined(separator: "  |  ")
 
         var summary = baseSummary
+        if let modifiedAt {
+            summary = "\(LastModifiedText.format(modifiedAt))  |  \(summary)"
+        }
         if document.isTruncated {
             summary += "  |  Previewing first \(ByteCountFormatter.string(fromByteCount: Int64(document.readBytes), countStyle: .file))"
         }
@@ -1960,7 +1968,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// markdown（≤8MB）→ WKWebView + 真 github-markdown-css 呈现。构建 HTML、载入、
     /// 重建大纲、填元信息；选中+复制由 WebView 原生自带。
-    private func renderMarkdownWeb(document: LoadedText, targetLine: Int?) {
+    private func renderMarkdownWeb(document: LoadedText, targetLine: Int?, modifiedAt: Date?) {
         setSelectionChipsHidden(true)
         webViewSelectionLine = nil
         isMarkdownWebActive = true
@@ -1980,6 +1988,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             ByteCountFormatter.string(fromByteCount: document.totalBytes, countStyle: .file),
             document.encodingName
         ].joined(separator: "  |  ")
+        if let modifiedAt {
+            summary = "\(LastModifiedText.format(modifiedAt))  |  \(summary)"
+        }
         if document.isTruncated {
             summary += "  |  Previewing first \(ByteCountFormatter.string(fromByteCount: Int64(document.readBytes), countStyle: .file))"
         }
