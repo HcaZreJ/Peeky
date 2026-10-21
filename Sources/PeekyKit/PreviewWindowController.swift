@@ -885,12 +885,17 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         contentView.addSubview(headerDivider)
 
         titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        // 抗压缩同样低于窗口「保持当前尺寸」的 500：超长文件名中段省略，不把窗口撑宽。
         titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         titleLabel.maximumNumberOfLines = 1
 
         metaLabel.font = NSFont.systemFont(ofSize: 11)
         metaLabel.textColor = .secondaryLabelColor
-        metaLabel.lineBreakMode = .byTruncatingMiddle
+        // 副标题以最后更改时间开头，放不下时从尾部省略，时间那一段留到最后才被截。
+        // 抗压缩低于窗口「保持当前尺寸」的 500：否则这一行宁可把窗口撑宽也不省略自己。
+        metaLabel.lineBreakMode = .byTruncatingTail
+        metaLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         metaLabel.maximumNumberOfLines = 1
 
         let titleStack = NSStackView(views: [titleLabel, metaLabel])
@@ -952,12 +957,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         // 标题钉左、控件组钉右，中间只留一条「至少 12」的空隙：窗口变宽时富余宽度整段落进
         // 这条空隙。控件组一律不吸收富余宽度——它们的间距是编码分组关系的（组内 8 / 两小组 12 /
-        // 两大组 20），被拉开就读成了别的分组。标题是唯一可压缩的一侧，过长时中段省略。
+        // 两大组 20），被拉开就读成了别的分组。标题是唯一可压缩的一侧：可压缩性设在 titleLabel /
+        // metaLabel 本身——设在 titleStack 上管不到它里面的 label。
         for group in [copyGroup, locationGroup, actionGroup, viewModeGroup, controls] {
             group.setHuggingPriority(.required, for: .horizontal)
             group.setContentCompressionResistancePriority(.required, for: .horizontal)
         }
-        titleStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         headerView.addSubview(titleStack)
         headerView.addSubview(controls)
@@ -1875,6 +1880,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
                 document: document,
                 mode: tab.mode,
                 targetLine: tab.targetLine,
+                modifiedAt: tab.stamp?.mtime,
                 tabID: tab.id
             )
         } else {
@@ -1888,11 +1894,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         document: LoadedText,
         mode: PreviewMode,
         targetLine: Int?,
+        modifiedAt: Date?,
         tabID: UUID
     ) {
         // markdown（≤8MB）走 WebView + 真 github-markdown-css；>8MB 落下方原生 raw 兜底。
         if document.kind == .markdown && document.readBytes <= 8 * 1024 * 1024 {
-            renderMarkdownWeb(document: document, targetLine: targetLine)
+            renderMarkdownWeb(document: document, targetLine: targetLine, modifiedAt: modifiedAt)
             return
         }
 
@@ -1945,6 +1952,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         ].joined(separator: "  |  ")
 
         var summary = baseSummary
+        if let modifiedAt {
+            summary = "\(LastModifiedText.format(modifiedAt))  |  \(summary)"
+        }
         if document.isTruncated {
             summary += "  |  Previewing first \(ByteCountFormatter.string(fromByteCount: Int64(document.readBytes), countStyle: .file))"
         }
@@ -2007,7 +2017,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     /// markdown（≤8MB）→ WKWebView + 真 github-markdown-css 呈现。构建 HTML、载入、
     /// 重建大纲、填元信息；选中+复制由 WebView 原生自带。
-    private func renderMarkdownWeb(document: LoadedText, targetLine: Int?) {
+    private func renderMarkdownWeb(document: LoadedText, targetLine: Int?, modifiedAt: Date?) {
         setSelectionChipsHidden(true)
         webViewSelectionLine = nil
         isMarkdownWebActive = true
@@ -2027,6 +2037,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             ByteCountFormatter.string(fromByteCount: document.totalBytes, countStyle: .file),
             document.encodingName
         ].joined(separator: "  |  ")
+        if let modifiedAt {
+            summary = "\(LastModifiedText.format(modifiedAt))  |  \(summary)"
+        }
         if document.isTruncated {
             summary += "  |  Previewing first \(ByteCountFormatter.string(fromByteCount: Int64(document.readBytes), countStyle: .file))"
         }
