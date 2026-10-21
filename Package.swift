@@ -71,17 +71,24 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-markdown.git", exact: "0.8.0")
     ],
     targets: [
+        // Formatting, parsing, highlighting and file-tree logic with no AppKit
+        // or WebKit: shared by the Peeky app (PeekyKit) and the terminal UI.
         .target(
-            name: "PeekyKit",
+            name: "PeekyCore",
             dependencies: [
                 .product(name: "Markdown", package: "swift-markdown")
             ],
-            path: "Sources/PeekyKit",
+            path: "Sources/PeekyCore",
             resources: [.copy("Resources/shiki-bundle.js"), .copy("Resources/github-markdown.css")],
-            // `PeekyTests` needs `@testable import PeekyKit` in every build
+            // `PeekyTests` needs `@testable import` in every build
             // configuration: `swift build -c release` (no --product filter)
-            // builds every target in the package, including PeekyTests, so
-            // PeekyKit must stay testable even in release configuration.
+            // builds every target in the package, including PeekyTests.
+            swiftSettings: [.unsafeFlags(["-enable-testing"])]
+        ),
+        .target(
+            name: "PeekyKit",
+            dependencies: ["PeekyCore"],
+            path: "Sources/PeekyKit",
             swiftSettings: [.unsafeFlags(["-enable-testing"])]
         ),
         .executableTarget(
@@ -91,7 +98,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "PeekyTests",
-            dependencies: ["PeekyKit"],
+            dependencies: ["PeekyKit", "PeekyCore"],
             path: "Tests",
             swiftSettings: testSwiftSettings,
             linkerSettings: testLinkerSettings

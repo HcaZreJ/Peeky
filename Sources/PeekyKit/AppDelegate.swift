@@ -1,4 +1,5 @@
 import AppKit
+import PeekyCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {

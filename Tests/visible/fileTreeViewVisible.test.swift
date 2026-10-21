@@ -2,6 +2,7 @@ import Testing
 import AppKit
 import Foundation
 @testable import PeekyKit
+@testable import PeekyCore
 
 // MARK: - Fixture helpers
 //

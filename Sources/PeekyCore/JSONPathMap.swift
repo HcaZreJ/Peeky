@@ -1,7 +1,7 @@
 import Foundation
 
 /// One step of a JSON node's access path: an object member key or an array index.
-enum JSONPathSegment: Equatable, Sendable {
+package enum JSONPathSegment: Equatable, Sendable {
     case key(String)
     case index(Int)
 }
@@ -13,20 +13,20 @@ enum JSONPathSegment: Equatable, Sendable {
 ///
 /// `build(prettyText:)` 单遍 UTF-16 词法扫描 pretty-print 后的 JSON 文本，
 /// 为每一条逻辑行（按 "\n" 切分）求出该行所指节点。任何输入都不抛错、不 trap。
-struct JSONPathMap: Equatable, Sendable {
+package struct JSONPathMap: Equatable, Sendable {
     /// 树节点：一个路径段 + 其父节点在 `nodes` 中的下标（-1 表示父为根）。
-    struct Node: Equatable, Sendable {
-        let parent: Int32
-        let segment: JSONPathSegment
+    package struct Node: Equatable, Sendable {
+        package let parent: Int32
+        package let segment: JSONPathSegment
     }
 
     /// 全部路径段节点，按创建顺序排列。
-    let nodes: [Node]
+    package let nodes: [Node]
     /// 每逻辑行对应的节点下标；-1 表示该行指向根（路径为空）。
     /// 行数 = 文本按 "\n" 切分的段数（空文本为 1 行、-1）。
-    let lineNode: [Int32]
+    package let lineNode: [Int32]
 
-    init(nodes: [Node], lineNode: [Int32]) {
+    package init(nodes: [Node], lineNode: [Int32]) {
         self.nodes = nodes
         self.lineNode = lineNode
     }
@@ -48,7 +48,7 @@ struct JSONPathMap: Equatable, Sendable {
         var awaitingElementStart: Bool = false
     }
 
-    static func build(prettyText: String) -> JSONPathMap {
+    package static func build(prettyText: String) -> JSONPathMap {
         let units = Array(prettyText.utf16)
         let length = units.count
 
@@ -253,7 +253,7 @@ struct JSONPathMap: Equatable, Sendable {
 
     /// 0-based 行号查路径：取 lineNode[line]，沿 parent 回溯到 -1，反转得根→叶顺序。
     /// 越界（负数或 >= lineNode.count）返回空数组。
-    func path(line: Int) -> [JSONPathSegment] {
+    package func path(line: Int) -> [JSONPathSegment] {
         guard line >= 0, line < lineNode.count else { return [] }
 
         var segments: [JSONPathSegment] = []
@@ -272,7 +272,7 @@ struct JSONPathMap: Equatable, Sendable {
     /// 字符串转义（含单引号 → `'`），因此产出的表达式在任何粘贴上下文
     /// （shell 单引号、.jq 脚本文件、双引号）里都是同一份合法字面量，不依赖
     /// shell 拼接技巧；同时不含裸单引号可读性更好，适合直接显示在状态栏上。
-    static func jqExpression(_ path: [JSONPathSegment]) -> String {
+    package static func jqExpression(_ path: [JSONPathSegment]) -> String {
         guard !path.isEmpty else { return "." }
 
         var result = ""
@@ -338,7 +338,7 @@ struct JSONPathMap: Equatable, Sendable {
     // MARK: - dotPath
 
     /// 序列化为点分形态（lodash / 日常记法）。
-    static func dotPath(_ path: [JSONPathSegment]) -> String {
+    package static func dotPath(_ path: [JSONPathSegment]) -> String {
         path.map { segment -> String in
             switch segment {
             case .key(let k): return k
@@ -355,7 +355,7 @@ struct JSONPathMap: Equatable, Sendable {
     /// 会把占多个 UTF-16 单元的字形（超出 BMP 的 CJK 扩展字符、emoji 等）从中间切开，
     /// 产生不成对的 surrogate / 断裂字形；`Array(text)` + `Character` 切片永远落在
     /// 字形边界上。limit 过小（保留长度算出 <= 0）时退化为只返回省略号本身。
-    static func truncatedForDisplay(_ text: String, limit: Int) -> String {
+    package static func truncatedForDisplay(_ text: String, limit: Int) -> String {
         let characters = Array(text)
         guard characters.count > limit else { return text }
 

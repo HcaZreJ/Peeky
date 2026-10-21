@@ -13,12 +13,13 @@
 ## 目录结构
 ```
 peeky/
-├── Package.swift                    # SPM：PeekyKit(库) + Peeky(executable) + PeekyTests(executable)
+├── Package.swift                    # SPM：PeekyCore(库) + PeekyKit(库) + Peeky(executable) + PeekyTests(executable)
 ├── Package.resolved                 # 锁定 swift-markdown 0.8.0
 ├── Sources/Peeky/                   # 入口 main.swift
-├── Sources/PeekyKit/                # 全部实现（见 PROJECT.md 模块地图）
+├── Sources/PeekyCore/               # 不依赖 AppKit/WebKit 的格式化、解析、高亮、文件树逻辑（见 PROJECT.md 模块地图）
 │   ├── Resources/shiki-bundle.js    # checked-in 高亮引擎产物（~755KB，SPM resource）
 │   └── Resources/github-markdown.css # 内嵌 sindresorhus/github-markdown-css（markdown WebView 样式，SPM resource）
+├── Sources/PeekyKit/                # AppKit / WebKit 界面（窗口、视图、控制器），依赖 PeekyCore
 ├── Tests/                           # PeekyTests：entry.swift + visible/ + hidden/
 ├── Resources/                       # Info.plist（peeky:// scheme + DocumentTypes）+ 图标
 ├── bin/peek                         # CLI（shell，零 Node）
@@ -31,9 +32,9 @@ peeky/
 ```
 
 ## 构建产物
-- `swift build -c release` → `.build/release/Peeky` + `.build/release/Peeky_PeekyKit.bundle`（SPM 资源包，内含 shiki-bundle.js + github-markdown.css）
-- `scripts/build-app.sh` → `.build/Peeky.app`（二进制 + Info.plist + icns + PeekyKit 资源包，ad-hoc codesign）
-- `HighlightService` 运行时寻找资源包路径：`.app` 的 `Contents/Resources/` 与 `swift build` 输出目录两个候选，找不到时降级为纯文本显示
+- `swift build -c release` → `.build/release/Peeky` + `.build/release/Peeky_PeekyCore.bundle`（SPM 资源包，内含 shiki-bundle.js + github-markdown.css）
+- `scripts/build-app.sh` → `.build/Peeky.app`（二进制 + Info.plist + icns + PeekyCore 资源包，ad-hoc codesign）
+- `CoreResources` 运行时寻找资源包：`Bundle.main.resourceURL`（`.app` 的 `Contents/Resources/`）、`Bundle.main.bundleURL`（`swift build` 输出目录）、可执行文件真实路径所在目录及其 `../Resources`，依次尝试；找不到时高亮降级为纯文本、Markdown 样式为空
 
 ## shiki bundle（高亮引擎）
 - 语言：python/typescript/javascript/json/yaml/toml/bash/swift/ini（9 门，扩展名别名 16 个）

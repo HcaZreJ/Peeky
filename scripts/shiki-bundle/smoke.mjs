@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
-const BUNDLE_PATH = join(SCRIPT_DIR, '..', '..', 'Sources', 'PeekyKit', 'Resources', 'shiki-bundle.js')
+const BUNDLE_PATH = join(SCRIPT_DIR, '..', '..', 'Sources', 'PeekyCore', 'Resources', 'shiki-bundle.js')
 
 // Known Dark Modern / Dark+ colors: comments and keywords.
 const KNOWN_COLORS = new Set(['#6a9955', '#569cd6', '#c586c0', '#4ec9b0', '#ce9178', '#b5cea8'])

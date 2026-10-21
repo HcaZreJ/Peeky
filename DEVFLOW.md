@@ -10,7 +10,7 @@
 | `bash scripts/build-app.sh` | 组装 `.build/Peeky.app` + ad-hoc codesign（正式身份，供 CI 打包）；`--install` 装到 `~/Applications/Peeky Dev.app`，转成 dev 身份（`local.peeky.dev` / `peeky-dev://` / 独立 Preferences），symlink `~/.local/bin/peek` |
 | `swift build --product PeekyTests && ./.build/out/Products/Debug/PeekyTests` | 运行全部测试（可加 `--filter <suite>`） |
 | `scripts/run-hidden-tests.sh <unit>` | 运行该单元的 hidden 测试，仅输出 `PASSED: X/Y` |
-| `node scripts/build-shiki-bundle.mjs` | 重新生成 `Sources/PeekyKit/Resources/shiki-bundle.js`（幂等；改语言或主题后运行） |
+| `node scripts/build-shiki-bundle.mjs` | 重新生成 `Sources/PeekyCore/Resources/shiki-bundle.js`（幂等；改语言或主题后运行） |
 | `node scripts/shiki-bundle/smoke.mjs` | bundle 冒烟测试：3 种语言 tokenize + dark_modern 配色 + 分块续接断言 |
 | `bash scripts/record-demo.sh` | 生成 README 用的 hero 视频与三张截图；子命令 `--stills` `--video`，屏幕索引 `--screen N` |
 | `git tag vX.Y.Z && git push origin vX.Y.Z` | 发布：触发 CI 构建 + GitHub Release + 更新 Homebrew cask（见「发布」） |
@@ -31,7 +31,8 @@
 
 ## 测试策略（Test-First，双层）
 - 叶子纯函数模块：`Tests/visible/` + `Tests/hidden/`（Swift Testing；suite 命名 `Visible_<unit>` / `Hidden_<unit>` 供 `--filter` 精确匹配；同 target 内文件 basename 必须唯一，命名 `<unit>Visible.test.swift` / `<unit>Hidden.test.swift`）。
-- 测试是独立 executable `PeekyTests`（`Tests/entry.swift` 经 `Testing.__swiftPMEntryPoint()` 进入），`@testable import PeekyKit` 走 debug 构建。
+- 测试是独立 executable `PeekyTests`（`Tests/entry.swift` 经 `Testing.__swiftPMEntryPoint()` 进入），测试文件同时 `@testable import PeekyKit` 与 `@testable import PeekyCore`，走 debug 构建。
+- 开真实窗口的界面测试（`Visible_headerMeta`、`Visible_headerLayout` 等）在默认的并行运行下偶发失败；全量验收用 `./.build/out/Products/Debug/PeekyTests --no-parallel`。
 - hidden 运行器：`scripts/run-hidden-tests.sh <unit>`，仅输出 `PASSED: X/Y`。
 - Stub 阶段用 **degenerate 返回值**（空集合 / nil / 空串），测试以断言失败呈现失败状态（"全部 FAIL 且非编译错误"的信号）。测试内对 stub 可能返回的集合做下标访问必须经过 `try #require` 或安全下标；直接使用 `[0]` 会 trap 中止整个共享 PeekyTests 进程，其余用例都无法运行。
 
@@ -89,6 +90,6 @@ brew upgrade --cask peeky
 - 顶栏 6 个按钮成组停在窗口右端，拖宽窗口时保持成组、不被拉开；标题过长时中段省略，按钮组位置不动。六颗的图标与 Content / Name / Full path / Rel path / Finder / More 六行文字在浅色深色下都读得清。
 - 打开任意文件，顶栏文件名下面一行以「最后更改于：yyyy 年 MM 月 dd 日 HH:mm:ss」开头，与 Finder 的「修改日期」一致（精确到秒）；在外部改写这个文件，这一段随正文一起刷新；把窗口拖窄，这一行从尾部省略，时间一段最后才被截，按钮组不被挤出窗口。
 - markdown 文件下打开 ⋯ 菜单，Wrap Lines 置灰；切到源码 / JSON 文件后它恢复可用且勾选态正确。
-- `<py / ts / yaml …>` 打开后应显示 Dark Modern 主题高亮，深色背景统一；选中 ⌘C 可复制；⌘E 打开系统默认编辑器并跳到当前行。
+- `<py / ts / yaml …>` 打开后应显示 Dark Modern 主题高亮，深色背景统一；选中 ⌘C 可复制。
 - `.app` bundle 打包后，执行 `open "peeky://open?path=...&line=N"` 应打开正式版 Peeky 并定位到指定行；`open "peeky-dev://open?path=...&line=N"` 应打开本地 dev 版。
 - 大文件的行为：非 JSON / JSONL 且大于 8 MB 时降级为 raw，不阻塞界面；JSON / JSONL 仍然进行缩进格式化 + 可视区惰性高亮，即使大文件也不阻塞。

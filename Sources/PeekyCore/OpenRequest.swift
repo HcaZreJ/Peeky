@@ -1,22 +1,22 @@
 import Foundation
 
-struct OpenRequest {
-    let url: URL
-    let line: Int?
-    let column: Int?
+package struct OpenRequest {
+    package let url: URL
+    package let line: Int?
+    package let column: Int?
 
-    init(url: URL, line: Int? = nil, column: Int? = nil) {
+    package init(url: URL, line: Int? = nil, column: Int? = nil) {
         self.url = url.standardizedFileURL
         self.line = line
         self.column = column
     }
 
-    static func fileURL(_ url: URL) -> OpenRequest? {
+    package static func fileURL(_ url: URL) -> OpenRequest? {
         guard url.isFileURL else { return nil }
         return OpenRequest(url: url)
     }
 
-    static func commandLineArgument(_ argument: String) -> OpenRequest? {
+    package static func commandLineArgument(_ argument: String) -> OpenRequest? {
         if let url = URL(string: argument),
            let scheme = url.scheme,
            !scheme.isEmpty,
@@ -41,7 +41,7 @@ struct OpenRequest {
         return nil
     }
 
-    static func incomingURL(_ url: URL) -> OpenRequest? {
+    package static func incomingURL(_ url: URL) -> OpenRequest? {
         if url.isFileURL {
             return fileURL(url)
         }

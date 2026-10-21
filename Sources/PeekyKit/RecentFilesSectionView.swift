@@ -1,4 +1,5 @@
 import AppKit
+import PeekyCore
 
 // 空白窗口（窗口里没有打开的文件）里的最近文件列表：EmptyStateGroup 装着既有的「Peeky + Open File」
 // 与 RecentFilesSectionView；每一行是一个 RecentFileRowView。显示内容全部来自 RecentFiles.Item。

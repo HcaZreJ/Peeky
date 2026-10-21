@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import PeekyKit
+@testable import PeekyCore
 
 // MARK: - PreviewRenderer JSON/JSONL 分支：可见样例
 //

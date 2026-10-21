@@ -1,4 +1,5 @@
 import AppKit
+import PeekyCore
 
 /// 悬停跟踪区的安装工具。
 ///

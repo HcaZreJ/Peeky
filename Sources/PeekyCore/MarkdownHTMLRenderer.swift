@@ -5,16 +5,16 @@ import Markdown
 /// HTML，交由 WKWebView + 真 github-markdown-css 呈现，实现像素级对齐 github。
 ///
 /// 纯函数命名空间（无状态 enum），符合本 repo functional-core 约定。
-enum MarkdownHTMLRenderer {
+package enum MarkdownHTMLRenderer {
 
     /// GFM markdown → `.markdown-body` 内层 HTML 片段。
-    static func renderHTML(_ markdown: String) -> String {
+    package static func renderHTML(_ markdown: String) -> String {
         renderWithOutline(markdown).html
     }
 
     /// GFM markdown → (内层 HTML, 标题大纲)。h1–h4 标题按文档顺序赋 `id="heading-N"`，
     /// 序号 N 与 `outline` 数组下标一致，供大纲项 → `#heading-N` 跳转。
-    static func renderWithOutline(_ markdown: String) -> (html: String, outline: [MarkdownOutlineItem]) {
+    package static func renderWithOutline(_ markdown: String) -> (html: String, outline: [MarkdownOutlineItem]) {
         let extracted = extractFrontmatter(markdown)
         let document = Document(parsing: extracted.body, options: [.disableSmartOpts])
         let visitor = MarkdownHTMLVisitor()
@@ -27,7 +27,7 @@ enum MarkdownHTMLRenderer {
     /// 剩余 markdown 作为 body。行级 tokenize，不做完整 YAML 解析，容忍未加引号
     /// value 中的裸引号（agent md 常见写法）。仅当首行严格顶格 `---` 且能找到闭合
     /// `---` 时生效；其它情况返回空 HTML 与原文。
-    static func extractFrontmatter(_ markdown: String) -> (html: String, body: String) {
+    package static func extractFrontmatter(_ markdown: String) -> (html: String, body: String) {
         let lines = markdown.components(separatedBy: "\n")
         guard let first = lines.first, isFrontmatterFence(first) else {
             return ("", markdown)
@@ -174,7 +174,7 @@ enum MarkdownHTMLRenderer {
     }
 
     /// 组装完整 HTML 文档：内嵌 css + 包装样式 + `.markdown-body` 容器 + 极简滚动 JS。
-    static func documentHTML(bodyHTML: String, css: String) -> String {
+    package static func documentHTML(bodyHTML: String, css: String) -> String {
         """
         <!doctype html>
         <html>
@@ -216,26 +216,11 @@ enum MarkdownHTMLRenderer {
         """
     }
 
-    /// 照 HighlightService 多候选寻径从 PeekyKit 资源包读 github-markdown.css；
+    /// 从 PeekyCore 资源包读 github-markdown.css（寻径见 `CoreResources`）；
     /// 找不到返回空串（样式降级不崩）。
-    static func loadGithubMarkdownCSS() -> String {
-        let bundleName = "Peeky_PeekyKit.bundle"
-        var candidateURLs: [URL] = []
-
-        if let resourceURL = Bundle.main.resourceURL {
-            candidateURLs.append(resourceURL.appendingPathComponent(bundleName))
-        }
-        candidateURLs.append(Bundle.main.bundleURL.appendingPathComponent(bundleName))
-
-        for candidateURL in candidateURLs {
-            guard let resourceBundle = Bundle(url: candidateURL) else { continue }
-            guard let cssURL = resourceBundle.url(forResource: "github-markdown", withExtension: "css") else { continue }
-            if let source = try? String(contentsOf: cssURL, encoding: .utf8) {
-                return source
-            }
-        }
-
-        return ""
+    public static func loadGithubMarkdownCSS() -> String {
+        guard let cssURL = CoreResources.url(forResource: "github-markdown", withExtension: "css") else { return "" }
+        return (try? String(contentsOf: cssURL, encoding: .utf8)) ?? ""
     }
 
     // MARK: - Escaping

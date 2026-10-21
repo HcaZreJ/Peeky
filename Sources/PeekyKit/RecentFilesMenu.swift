@@ -1,4 +1,5 @@
 import AppKit
+import PeekyCore
 
 /// File ▸ Open Recent 子菜单的条目构建。条目文字与空白窗口里的行出自同一份 `RecentFiles.Item`，两处一字不差。
 enum RecentFilesMenu {

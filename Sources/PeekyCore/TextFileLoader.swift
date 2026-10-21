@@ -1,20 +1,20 @@
 import Foundation
 
-struct LoadedText {
-    let url: URL
-    let kind: FileKind
-    let text: String
-    let totalBytes: Int64
-    let readBytes: Int
-    let isTruncated: Bool
-    let encodingName: String
+package struct LoadedText {
+    package let url: URL
+    package let kind: FileKind
+    package let text: String
+    package let totalBytes: Int64
+    package let readBytes: Int
+    package let isTruncated: Bool
+    package let encodingName: String
 }
 
-enum TextLoadError: LocalizedError {
+package enum TextLoadError: LocalizedError {
     case directory(URL)
     case unreadableEncoding(URL)
 
-    var errorDescription: String? {
+    package var errorDescription: String? {
         switch self {
         case .directory(let url):
             return "\(url.lastPathComponent) is a directory."
@@ -24,10 +24,10 @@ enum TextLoadError: LocalizedError {
     }
 }
 
-enum TextFileLoader {
-    private static let maxPreviewBytes = 80 * 1024 * 1024
+package enum TextFileLoader {
+    private static let maxPreviewBytes = PreviewBudget.maxPreviewBytes
 
-    static func load(url: URL) throws -> LoadedText {
+    package static func load(url: URL) throws -> LoadedText {
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey])
         if values.isDirectory == true {
             throw TextLoadError.directory(url)

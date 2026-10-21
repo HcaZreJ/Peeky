@@ -4,8 +4,8 @@ import Foundation
 /// token 类型 + range（不含颜色，颜色由 `PeekyTheme` 按 kind 映射，解耦）。
 ///
 /// 支持按子范围 tokenize，服务 viewport-only 惰性上色（只对屏幕可见区上色）。
-enum JSONHighlighter {
-    enum JSONTokenKind {
+package enum JSONHighlighter {
+    package enum JSONTokenKind {
         case key
         case string
         case number
@@ -14,17 +14,17 @@ enum JSONHighlighter {
         case punctuation
     }
 
-    struct JSONToken: Equatable {
-        let kind: JSONTokenKind
-        let range: NSRange
+    package struct JSONToken: Equatable {
+        package let kind: JSONTokenKind
+        package let range: NSRange
 
-        init(kind: JSONTokenKind, range: NSRange) {
+        package init(kind: JSONTokenKind, range: NSRange) {
             self.kind = kind
             self.range = range
         }
     }
 
-    static func tokenize(_ text: String, in range: NSRange? = nil) -> [JSONToken] {
+    package static func tokenize(_ text: String, in range: NSRange? = nil) -> [JSONToken] {
         let nsText = text as NSString
         let length = nsText.length
         var tokens: [JSONToken] = []

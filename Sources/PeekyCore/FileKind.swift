@@ -1,6 +1,6 @@
 import Foundation
 
-enum FileKind: Equatable {
+package enum FileKind: Equatable {
     case markdown
     case json
     case jsonl
@@ -11,7 +11,7 @@ enum FileKind: Equatable {
     case log
     case text
 
-    var displayName: String {
+    package var displayName: String {
         switch self {
         case .markdown: "Markdown"
         case .json: "JSON"
@@ -25,7 +25,7 @@ enum FileKind: Equatable {
         }
     }
 
-    var hasFormattedPreview: Bool {
+    package var hasFormattedPreview: Bool {
         switch self {
         case .markdown, .json, .jsonl, .xml, .plist:
             true
@@ -34,7 +34,7 @@ enum FileKind: Equatable {
         }
     }
 
-    static func detect(url: URL, text: String) -> FileKind {
+    package static func detect(url: URL, text: String) -> FileKind {
         let ext = url.pathExtension.lowercased()
 
         switch ext {

@@ -1,24 +1,24 @@
 import Foundation
 
-struct JSONLineRecord {
-    let originalLine: Int
-    let range: NSRange
-    let isInvalid: Bool
+package struct JSONLineRecord {
+    package let originalLine: Int
+    package let range: NSRange
+    package let isInvalid: Bool
 }
 
-struct JSONLinesPreview {
-    let text: String
-    let invalidLineCount: Int
-    let records: [JSONLineRecord]
+package struct JSONLinesPreview {
+    package let text: String
+    package let invalidLineCount: Int
+    package let records: [JSONLineRecord]
 }
 
-enum JSONFormatter {
-    static func prettyJSON(_ text: String) throws -> String {
+package enum JSONFormatter {
+    package static func prettyJSON(_ text: String) throws -> String {
         let object = try parseJSON(text)
         return try prettyJSONValue(object, fallback: text.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
-    static func prettyJSONLines(_ text: String) -> JSONLinesPreview {
+    package static func prettyJSONLines(_ text: String) -> JSONLinesPreview {
         var invalidLineCount = 0
         var output = ""
         var records: [JSONLineRecord] = []

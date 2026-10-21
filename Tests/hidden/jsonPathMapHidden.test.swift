@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import PeekyKit
+@testable import PeekyCore
 
 // MARK: - JSONPathMap 全面用例
 //

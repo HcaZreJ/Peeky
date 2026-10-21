@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import PeekyKit
+@testable import PeekyCore
 
 // MARK: - JSONHighlighter 可见样例
 //

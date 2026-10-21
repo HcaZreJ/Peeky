@@ -1,4 +1,5 @@
 import AppKit
+import PeekyCore
 import Foundation
 
 /// repo-aware 文件树组件：基于 NSOutlineView 的惰性加载文件树。

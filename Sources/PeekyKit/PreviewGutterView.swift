@@ -1,4 +1,5 @@
 import AppKit
+import PeekyCore
 import Foundation
 
 /// 行号/记录标记 gutter：挂载为 scrollView.verticalRulerView（NSRulerView 子类），

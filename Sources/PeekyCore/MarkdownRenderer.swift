@@ -1,16 +1,16 @@
 import Foundation
 import Markdown
 
-struct MarkdownOutlineItem {
-    let level: Int
-    let title: String
-    let sourceLine: Int
+package struct MarkdownOutlineItem {
+    package let level: Int
+    package let title: String
+    package let sourceLine: Int
 }
 
 /// Markdown 大纲抽取：WKWebView 主渲染路径与 >8MB raw 兜底路径共用；`MarkdownHTMLRenderer`
 /// 在 AST→HTML 遍历中直接产大纲，本入口是纯文本 raw 兜底走的独立解析入口。
-enum MarkdownRenderer {
-    static func outline(in text: String) -> [MarkdownOutlineItem] {
+package enum MarkdownRenderer {
+    package static func outline(in text: String) -> [MarkdownOutlineItem] {
         let body = MarkdownHTMLRenderer.extractFrontmatter(text).body
         let document = Document(parsing: body, options: [.disableSmartOpts])
         var items: [MarkdownOutlineItem] = []
@@ -42,7 +42,7 @@ enum MarkdownRenderer {
     /// Recursively flattens an element's readable text content, discarding
     /// Markdown syntax markers (backticks, emphasis asterisks, link
     /// brackets/URLs) so headings read naturally in the outline sidebar.
-    static func plainDisplayText(of markup: Markup) -> String {
+    package static func plainDisplayText(of markup: Markup) -> String {
         if let text = markup as? Text {
             return text.string
         }

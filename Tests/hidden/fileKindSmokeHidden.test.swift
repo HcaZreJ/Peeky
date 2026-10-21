@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 @testable import PeekyKit
+@testable import PeekyCore
 
 @Suite("Hidden_fileKindSmoke")
 struct Hidden_fileKindSmoke {

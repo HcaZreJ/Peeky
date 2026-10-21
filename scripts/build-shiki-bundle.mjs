@@ -17,7 +17,7 @@ import { flattenDarkModernTheme } from './shiki-bundle/src/flatten-theme.mjs'
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 const BUNDLE_DIR = join(SCRIPT_DIR, 'shiki-bundle')
 const REPO_ROOT = dirname(SCRIPT_DIR)
-const OUT_FILE = join(REPO_ROOT, 'Sources', 'PeekyKit', 'Resources', 'shiki-bundle.js')
+const OUT_FILE = join(REPO_ROOT, 'Sources', 'PeekyCore', 'Resources', 'shiki-bundle.js')
 
 // esbuild is a devDependency of scripts/shiki-bundle, not of this script's
 // own directory; resolve it relative to that package explicitly.

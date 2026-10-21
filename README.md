@@ -140,7 +140,7 @@ Peeky.app 在 Info.plist 中注册为下列文件类型的查看器（`LSHandler
 
 ## 语法高亮
 
-高亮引擎是 JavaScriptCore + shiki，产物 `Sources/PeekyKit/Resources/shiki-bundle.js` 已 checked-in，运行期不依赖 Node。
+高亮引擎是 JavaScriptCore + shiki，产物 `Sources/PeekyCore/Resources/shiki-bundle.js` 已 checked-in，运行期不依赖 Node。
 
 打包的语言与扩展名映射：
 
@@ -176,7 +176,7 @@ bash scripts/build-app.sh --install  # 组装并安装 dev 版到 ~/Applications
 node scripts/build-shiki-bundle.mjs
 ```
 
-Node ≥ 22。产物 `Sources/PeekyKit/Resources/shiki-bundle.js` 已 checked-in，通常不需要重新构建。
+Node ≥ 22。产物 `Sources/PeekyCore/Resources/shiki-bundle.js` 已 checked-in，通常不需要重新构建。
 
 运行测试：
 
@@ -188,8 +188,9 @@ swift build --product PeekyTests && ./.build/debug/PeekyTests
 
 ```
 Sources/Peeky/                    入口 main.swift
-Sources/PeekyKit/                 全部实现：渲染管线、格式化器、AppKit 控制器
-Sources/PeekyKit/Resources/       shiki-bundle.js、github-markdown.css
+Sources/PeekyCore/                不依赖 AppKit 的格式化、解析、高亮、文件树逻辑
+Sources/PeekyCore/Resources/      shiki-bundle.js、github-markdown.css
+Sources/PeekyKit/                 AppKit / WebKit 界面：窗口、视图、控制器
 Resources/                        Info.plist（peeky:// scheme + UTI）、图标
 bin/peek                          shell 包装，把参数编码成 peeky:// URL 后 open
 scripts/build-app.sh              release 构建 + .app 组装 + 可选安装

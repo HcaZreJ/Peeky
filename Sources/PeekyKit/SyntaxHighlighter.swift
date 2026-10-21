@@ -1,8 +1,9 @@
 import AppKit
+import PeekyCore
 import Foundation
 
 enum SyntaxHighlighter {
-    private static let highlightLimit = 1_500_000
+    private static let highlightLimit = PreviewBudget.highlightLimit
 
     static func monospace(_ text: String) -> NSAttributedString {
         NSMutableAttributedString(string: text, attributes: baseMonospaceAttributes())
