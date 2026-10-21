@@ -4,7 +4,7 @@ import AppKit
 
 // MARK: - Fixture helpers
 //
-// 用真实的 PreviewWindowController 打开一份修改时间钉死的文件，读顶栏标题下面那行副标题。
+// 用真实的 PreviewWindowController 打开一份修改时间钉死的文件，看顶栏标题区（文件名 + 下面那行副标题）。
 // Markdown 与其它文件走两条渲染路径（WebView / NSTextView），副标题各拼各的，两条都要验。
 
 private func makeFixtureFile(named name: String, modifiedAt: Date) throws -> URL {
@@ -103,5 +103,18 @@ struct Visible_headerMeta {
         let (_, window) = try openInWindow(url, width: 900)
 
         #expect(abs(try controlsTrailingEdge(in: window) - (900 - 14)) < 0.6)
+    }
+
+    @Test("超长文件名中段省略：默认宽度的窗口里按钮组仍贴着窗口右缘")
+    func longTitleTruncatesInsteadOfPushingControls() throws {
+        // AI 生成的文件名常有六七十个字符；源码文件多一个 Format / Raw 段控件，标题区最窄。
+        let url = try makeFixtureFile(
+            named: "2026-10-20-a-very-long-ai-generated-session-handoff-notes-for-review.py",
+            modifiedAt: modifiedAt
+        )
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let (_, window) = try openInWindow(url)
+
+        #expect(abs(try controlsTrailingEdge(in: window) - (1080 - 14)) < 0.6)
     }
 }

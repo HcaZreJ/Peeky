@@ -871,7 +871,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         contentView.addSubview(headerDivider)
 
         titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        // 抗压缩同样低于窗口「保持当前尺寸」的 500：超长文件名中段省略，不把窗口撑宽。
         titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         titleLabel.maximumNumberOfLines = 1
 
         metaLabel.font = NSFont.systemFont(ofSize: 11)
@@ -941,12 +943,12 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         // 标题钉左、控件组钉右，中间只留一条「至少 12」的空隙：窗口变宽时富余宽度整段落进
         // 这条空隙。控件组一律不吸收富余宽度——它们的间距是编码分组关系的（组内 8 / 两小组 12 /
-        // 两大组 20），被拉开就读成了别的分组。标题是唯一可压缩的一侧，过长时中段省略。
+        // 两大组 20），被拉开就读成了别的分组。标题是唯一可压缩的一侧：可压缩性设在 titleLabel /
+        // metaLabel 本身——设在 titleStack 上管不到它里面的 label。
         for group in [copyGroup, locationGroup, actionGroup, viewModeGroup, controls] {
             group.setHuggingPriority(.required, for: .horizontal)
             group.setContentCompressionResistancePriority(.required, for: .horizontal)
         }
-        titleStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         headerView.addSubview(titleStack)
         headerView.addSubview(controls)
