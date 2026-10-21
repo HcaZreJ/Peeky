@@ -350,13 +350,18 @@ private final class MarkdownOutlineItemView: NSControl {
 
 /// 作为 NSScrollView documentView 使用的纵向栈：翻转坐标系让内容顶部对齐、
 /// 初始视口停在最上（未翻转的 documentView 超出视口时停靠底部）。
-private final class FlippedStackView: NSStackView {
+final class FlippedStackView: NSStackView {
     override var isFlipped: Bool { true }
 }
 
 final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMenuDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     var onOpenRequested: (() -> Void)?
     var onURLsDropped: (([URL]) -> Void)?
+    /// 一个文件成功读进 tab（新开或切回已开的 tab）后回报，供最近文件列表记录；读取失败的不回报。
+    var onFileOpened: ((URL) -> Void)?
+    /// 空白窗口里最近文件列表的数据源；每次显示时调用，能否打开由提供方现查磁盘。
+    var recentFileItems: (() -> [RecentFiles.Item])?
+    var onClearRecentFiles: (() -> Void)?
     var onClose: (() -> Void)?
 
     private let rootView = DropContainerView()
@@ -406,6 +411,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let jqPathChipButton = NSButton()
     private var selectionUpdateTimer: Timer?
     private let emptyView = NSStackView()
+    private let recentFilesSection = RecentFilesSectionView()
+    /// 空白窗口的整块内容：emptyView（Peeky + Open File）在上，最近文件列表在下。
+    private lazy var emptyStateGroup = EmptyStateGroup(launcher: emptyView, recentFiles: recentFilesSection)
     /// 底部状态栏（Ln/Col/选中数/size）：所有 textView 类模式启用，markdown WebView /
     /// 空态 / 错误态隐藏（见 setStatusBarVisible）。
     private let statusBarView = NSView()
@@ -554,6 +562,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     func open(requests: [OpenRequest]) {
         var selectedTabID: UUID?
+        var openedFileURLs: [URL] = []
 
         for request in requests {
             let standardizedURL = request.url.standardizedFileURL
@@ -574,6 +583,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
                     tabs[existingIndex].targetLine = request.line
                     tabs[existingIndex].targetColumn = request.column
                 }
+                if tabs[existingIndex].document != nil {
+                    openedFileURLs.append(tabs[existingIndex].url)
+                }
                 establishTreeRoot(for: standardizedURL)
                 continue
             }
@@ -588,6 +600,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             }
             tabs.append(tab)
             selectedTabID = tab.id
+            if tab.document != nil {
+                openedFileURLs.append(tab.url)
+            }
             establishTreeRoot(for: standardizedURL)
         }
 
@@ -599,6 +614,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         rebuildTabList()
         renderActiveTab()
+        openedFileURLs.forEach { onFileOpened?($0) }
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -679,11 +695,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             statusBarView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             statusBarView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             statusBarView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            statusBarView.heightAnchor.constraint(equalToConstant: 22),
-
-            emptyView.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
-            emptyView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor)
+            statusBarView.heightAnchor.constraint(equalToConstant: 22)
         ])
+        NSLayoutConstraint.activate(emptyStateGroup.constraints(centeredIn: contentView, below: headerDivider.bottomAnchor))
 
         if let dropWindow = window as? DropWindow {
             dropWindow.onDropFiles = { [weak self] urls in
@@ -1159,6 +1173,11 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
     }
 
+    /// 窗口回到前台时重取空白窗口的最近文件：离开期间 worktree 可能已被删掉。
+    @objc func windowDidBecomeKey(_ notification: Notification) {
+        recentFilesDidChange()
+    }
+
     /// 窗口失活立即隐藏浮动按钮（不等 debounce）。
     @objc func windowDidResignKey(_ notification: Notification) {
         setSelectionChipsHidden(true)
@@ -1488,7 +1507,35 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         emptyView.addArrangedSubview(appName)
         emptyView.addArrangedSubview(button)
-        contentView.addSubview(emptyView)
+
+        recentFilesSection.onOpen = { [weak self] path in
+            self?.openRecentFile(path: path)
+        }
+        recentFilesSection.onClear = { [weak self] in
+            self?.onClearRecentFiles?()
+        }
+        contentView.addSubview(emptyStateGroup)
+    }
+
+    /// 最近文件列表变了（记了一条 / 清空）。只有空白窗口在显示它，其余时候等下次回到空白态再取。
+    func recentFilesDidChange() {
+        guard tabs.isEmpty else { return }
+        reloadRecentFiles()
+    }
+
+    private func reloadRecentFiles() {
+        let items = recentFileItems?() ?? []
+        emptyStateGroup.setRecentFilesVisible(!items.isEmpty)
+        recentFilesSection.show(items)
+    }
+
+    /// 列表显示之后文件才消失时，不开出一个只有报错的 tab，而是重取列表，让这一行就地变成打不开。
+    private func openRecentFile(path: String) {
+        guard FileManager.default.fileExists(atPath: path) else {
+            reloadRecentFiles()
+            return
+        }
+        open(url: URL(fileURLWithPath: path))
     }
 
     private func loadTab(url: URL) -> PreviewTab {
@@ -2892,7 +2939,8 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         window?.title = "Peeky"
         window?.representedURL = nil
         titleLabel.stringValue = "Peeky"
-        emptyView.isHidden = false
+        emptyStateGroup.isHidden = false
+        reloadRecentFiles()
         scrollView.isHidden = true
         markdownWebView.isHidden = true
         isMarkdownWebActive = false
@@ -2911,7 +2959,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
     private func showPreviewState() {
         updateSidebarVisibility()
-        emptyView.isHidden = true
+        emptyStateGroup.isHidden = true
     }
 
     private func applyLineWrapping() {
