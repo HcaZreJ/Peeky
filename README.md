@@ -10,6 +10,7 @@ Peeky 是 macOS 上的只读文件预览器，解决用 IDE 打开 AI 产出的�
 ## 功能
 
 - 从终端 `peek path`、`peek path:line`、`peek path:line:col` 打开文件并跳到指定行、指定列。
+- 在终端里运行 `peek` 时，直接在当前终端（比如 Ghostty 或 kitty 的分栏）里打开终端版，不另开窗口：Markdown、JSON、源码照样排版着色，左侧有文件树和大纲，按 `q` 退出回到命令行。`peek --app` 打开 app 窗口。
 - Markdown 用 swift-markdown 解析成 HTML，在 WKWebView 中以 github-markdown.css 呈现，样式与 GitHub 一致；解析 YAML frontmatter 并单独渲染，提取 h1–h4 作为文档大纲。
 - JSON 与 JSONL 缩进格式化，对键、字符串、数字、布尔、null、标点做词法高亮；JSONL 解析失败的行原样保留并标出。
 - 源码语法高亮，覆盖 9 种语言，主题为 VS Code Dark Modern。
@@ -72,11 +73,21 @@ peek                       # 打开当前目录
 peek path/to/file          # 打开单个文件
 peek path/to/file:12       # 打开并跳到第 12 行
 peek path/to/file:12:8     # 跳到第 12 行第 8 列
-peek a.md b.jsonl          # 同时打开多个文件，每个文件占一个标签页
+peek --app path/to/file    # 总是打开 Peeky app 窗口
 peek --dev path/to/file    # 打开源码装的 dev 版
 ```
 
 行号和列号必须为正整数（正则 `[1-9][0-9]*`）。路径支持 `~` 展开。
+
+在终端里运行时 `peek` 打开终端版；在脚本、管道或 agent 的后台 shell 里运行时（标准输出不是终端）照旧打开 app。
+
+### 终端版
+
+- 按 `?` 列出全部按键。常用的：`j` / `k` 上下移动，空格 / `b` 翻页，`Tab` 在侧栏与正文之间切换，`s` 收起或显示侧栏，`q` 退出。
+- 鼠标拖动选中文字，按 `y` 复制；行号、项目符号、表格边框不会进剪贴板，JSON 折起来的部分复制出来是完整内容。`n` / `p` / `P` 复制文件名、绝对路径、仓库内相对路径。
+- 文件被外部改写后自动重读，停在原来的行；侧栏文件树随磁盘变化同步。
+- 配色跟随终端的明暗。在 kitty 里，Markdown 的一级、二级标题显示为放大的文字，仍可选中复制；其它终端用粗体和颜色区分。
+- 输出不是终端时（`peek-tui file.md | cat`）直接输出排好版的纯文字。
 
 ### `peeky://` URL scheme
 
@@ -191,8 +202,10 @@ Sources/Peeky/                    入口 main.swift
 Sources/PeekyCore/                不依赖 AppKit 的格式化、解析、高亮、文件树逻辑
 Sources/PeekyCore/Resources/      shiki-bundle.js、github-markdown.css
 Sources/PeekyKit/                 AppKit / WebKit 界面：窗口、视图、控制器
+Sources/PeekTUI/                  终端版界面：输入解析、排版、侧栏、画面差异输出
+Sources/peek-tui/                 终端版入口
 Resources/                        Info.plist（peeky:// scheme + UTI）、图标
-bin/peek                          shell 包装，把参数编码成 peeky:// URL 后 open
+bin/peek                          shell 包装：在终端里换成 peek-tui，否则把参数编码成 peeky:// URL 后 open
 scripts/build-app.sh              release 构建 + .app 组装 + 可选安装
 scripts/build-shiki-bundle.mjs    esbuild 生成 shiki bundle
 scripts/shiki-bundle/             shiki bundle 的 npm 源工程

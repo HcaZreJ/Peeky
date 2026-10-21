@@ -7,7 +7,12 @@
 | `swift build -c release` | release 构建（全量 ~40s） |
 | `swift run Peeky <path>` | 从源码直接运行（无 Finder 集成） |
 | `swift run Peeky <path>:<line>` | 打开并跳到指定行 |
-| `bash scripts/build-app.sh` | 组装 `.build/Peeky.app` + ad-hoc codesign（正式身份，供 CI 打包）；`--install` 装到 `~/Applications/Peeky Dev.app`，转成 dev 身份（`local.peeky.dev` / `peeky-dev://` / 独立 Preferences），symlink `~/.local/bin/peek` |
+| `swift build --product peek-tui` | 构建终端版 |
+| `./.build/out/Products/Debug/peek-tui <path>[:<line>]` | 在当前终端里打开文件（q 退出）；标准输出不是终端时直接输出文本 |
+| `PEEK_TUI_TRACE=1 ./.build/out/Products/Debug/peek-tui <path>` | 把读文件 / 格式化 / 切行 / JSON 索引各阶段耗时写进 `$TMPDIR/peek-tui.log`（测性能用 release 构建：`swift build -c release --product peek-tui`，二进制在 `.build/out/Products/Release/`） |
+| `bash scripts/tui-smoke.sh <path> [按键 \| !命令 ...]` | 终端版冒烟：隐藏的 kitty 窗口里运行，逐个发送按键并读回屏幕文字；`!` 开头的参数改为执行 shell 命令（模拟外部新建 / 改写文件）并等 1 秒；鼠标用 SGR 序列模拟（如 `"\x1b[<0;31;2M\x1b[<32;42;2M\x1b[<0;42;2m"` 是在第 2 行从第 31 列拖到第 42 列，坐标 1 起算），⌘C 用 `"\x1b[99;9u"`；最后按 q 并检查终端设置已还原（需已安装 kitty；`COLS` / `ROWS` 设窗口格数；`KITTY_ARGS` 传额外 kitty 选项；`!` 命令里可用 `kitty @ --to "$KITTY_SOCKET" set-colors background=#101010` 改终端背景，模拟明暗切换） |
+| `uv run --no-project python scripts/gen-width-table.py <EastAsianWidth.txt>` | 重新生成 `Sources/PeekTUI/Screen/EastAsianWidthTable.swift`（升级 Unicode 版本时运行） |
+| `bash scripts/build-app.sh` | 构建 app 与终端版，组装 `.build/Peeky.app`（终端版在 `Contents/MacOS/peek-tui`）+ ad-hoc codesign（正式身份，供 CI 打包）；`--install` 装到 `~/Applications/Peeky Dev.app`，转成 dev 身份（`local.peeky.dev` / `peeky-dev://` / 独立 Preferences），symlink `~/.local/bin/peek` |
 | `swift build --product PeekyTests && ./.build/out/Products/Debug/PeekyTests` | 运行全部测试（可加 `--filter <suite>`） |
 | `scripts/run-hidden-tests.sh <unit>` | 运行该单元的 hidden 测试，仅输出 `PASSED: X/Y` |
 | `node scripts/build-shiki-bundle.mjs` | 重新生成 `Sources/PeekyCore/Resources/shiki-bundle.js`（幂等；改语言或主题后运行） |
@@ -30,7 +35,7 @@
 > `the compiler is unable to type-check this expression in reasonable time`，整个测试 target 编不过。
 
 ## 测试策略（Test-First，双层）
-- 叶子纯函数模块：`Tests/visible/` + `Tests/hidden/`（Swift Testing；suite 命名 `Visible_<unit>` / `Hidden_<unit>` 供 `--filter` 精确匹配；同 target 内文件 basename 必须唯一，命名 `<unit>Visible.test.swift` / `<unit>Hidden.test.swift`）。
+- 叶子纯函数模块：`Tests/visible/` + `Tests/hidden/`（Swift Testing；suite 命名 `Visible_<unit>` / `Hidden_<unit>` 供 `--filter` 精确匹配；同 target 内文件 basename 必须唯一，命名 `<unit>Visible.test.swift` / `<unit>Hidden.test.swift`）。`--filter` 匹配的是 Swift 里的类型名，测试结构体本身也要命名为 `Visible_<unit>`；`--filter` 不支持用 `|` 同时匹配多个套件，要逐个运行。
 - 测试是独立 executable `PeekyTests`（`Tests/entry.swift` 经 `Testing.__swiftPMEntryPoint()` 进入），测试文件同时 `@testable import PeekyKit` 与 `@testable import PeekyCore`，走 debug 构建。
 - 开真实窗口的界面测试（`Visible_headerMeta`、`Visible_headerLayout` 等）在默认的并行运行下偶发失败；全量验收用 `./.build/out/Products/Debug/PeekyTests --no-parallel`。
 - hidden 运行器：`scripts/run-hidden-tests.sh <unit>`，仅输出 `PASSED: X/Y`。
@@ -93,3 +98,9 @@ brew upgrade --cask peeky
 - `<py / ts / yaml …>` 打开后应显示 Dark Modern 主题高亮，深色背景统一；选中 ⌘C 可复制。
 - `.app` bundle 打包后，执行 `open "peeky://open?path=...&line=N"` 应打开正式版 Peeky 并定位到指定行；`open "peeky-dev://open?path=...&line=N"` 应打开本地 dev 版。
 - 大文件的行为：非 JSON / JSONL 且大于 8 MB 时降级为 raw，不阻塞界面；JSON / JSONL 仍然进行缩进格式化 + 可视区惰性高亮，即使大文件也不阻塞。
+- 终端版（Ghostty 与 kitty 各走一遍，`bash scripts/build-app.sh --install` 之后用 `peek`，或直接跑 `.build/release/peek-tui`）：
+  ⌘D 分栏里 `peek <md>` 在该栏全屏打开，`q` 退出后终端恢复原样（光标、回显、能正常输入命令）；`peek --app <md>` 打开 app 窗口。
+  Markdown 的表格竖线逐行对齐、中英混排不错位；kitty 里 H1 / H2 是放大的文字，拖选能复制标题原文，Ghostty 里是粗体加颜色。
+  JSON 回车折叠、`M` / `R` 全部折叠展开，状态栏 jq 路径随光标变；拖选后 `y`，`pbpaste` 内容与选中一致。
+  侧栏在仓库里新建文件 1 秒内出现；外部改写当前文件后正文更新、停在原来的行。
+  切换系统明暗（两个终端都配了深浅两套主题时），终端版配色随之变化；源码视图保持深色底。

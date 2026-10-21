@@ -7,15 +7,18 @@ cd "$ROOT_DIR"
 # 只构建 app 产物。不带 --product 时 swiftbuild 会把 PeekyTests 一起构建，并在这个组合下
 # 漏传 Testing 的宏插件（见 DEVFLOW），release 构建因此失败——而打包本来就不需要测试 target。
 swift build -c release --product Peeky
+swift build -c release --product peek-tui
 
 APP_DIR="$ROOT_DIR/.build/Peeky.app"
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
 cp "$ROOT_DIR/.build/release/Peeky" "$APP_DIR/Contents/MacOS/Peeky"
+# 终端版与 app 同包发布;peek 在终端里运行时直接换成它。
+cp "$ROOT_DIR/.build/release/peek-tui" "$APP_DIR/Contents/MacOS/peek-tui"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$ROOT_DIR/Resources/Peeky.icns" "$APP_DIR/Contents/Resources/Peeky.icns"
-chmod +x "$APP_DIR/Contents/MacOS/Peeky"
+chmod +x "$APP_DIR/Contents/MacOS/Peeky" "$APP_DIR/Contents/MacOS/peek-tui"
 
 # peek CLI 打进 bundle,Homebrew Cask 用 binary stanza 直接 symlink 到 PATH。
 cp "$ROOT_DIR/bin/peek" "$APP_DIR/Contents/Resources/peek"
