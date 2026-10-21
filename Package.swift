@@ -40,6 +40,17 @@ if let searchPath = testingFrameworkSearchPath() {
         with: "/Library/Developer/usr/lib"
     )
     testSwiftSettings.append(.unsafeFlags(["-F", searchPath]))
+    // Command Line Tools 6.4 keeps the swift-testing macro plugin in a
+    // `testing/` subdirectory that the swiftbuild build system does not load,
+    // failing every `@Test` / `#expect` with "plugin for module
+    // 'TestingMacros' not found". Point the compiler at that directory.
+    let testingPluginPath = searchPath.replacingOccurrences(
+        of: "/Library/Developer/Frameworks",
+        with: "/usr/lib/swift/host/plugins/testing"
+    )
+    if FileManager.default.fileExists(atPath: testingPluginPath) {
+        testSwiftSettings.append(.unsafeFlags(["-plugin-path", testingPluginPath]))
+    }
     testLinkerSettings.append(.unsafeFlags([
         "-F", searchPath,
         "-framework", "Testing",
