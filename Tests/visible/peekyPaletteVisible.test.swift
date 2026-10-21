@@ -9,7 +9,7 @@ import Testing
 // 同一 token 在 light / dark 下不同。配色值本身是可调常量，不锁死具体 hex。
 
 @Suite("Visible_peekyPalette")
-struct PeekyPaletteVisibleTests {
+struct Visible_peekyPalette {
     @Test("6 位 hex 解析为对应 RGB，alpha 为 255")
     func sixDigitHex() {
         #expect(PeekyPalette.rgba(fromHex: "#1F2328") == PeekyPalette.RGBA(red: 0x1F, green: 0x23, blue: 0x28, alpha: 0xFF))

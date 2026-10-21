@@ -12,7 +12,7 @@
 
 ## 本 repo 铁律
 - **只读查看器**：不做编辑功能。
-- **纯函数核心**：格式化 / 渲染 / 解析逻辑一律写成无状态 `enum` 命名空间的静态纯函数（沿用 `PreviewRenderer` / `JSONFormatter` / `MarkdownRenderer` 的风格），UI 状态只放在 `PreviewWindowController`。
+- **纯函数核心**：格式化 / 渲染 / 解析逻辑一律写成无状态 `enum` 命名空间的静态纯函数（沿用 `PreviewRenderer` / `JSONFormatter` / `MarkdownRenderer` 的风格），UI 状态只放在 `PreviewWindowController`；终端版（PeekTUI）的状态只放在 `TUIRuntime`，决策写成纯函数（`TUIReducer` / `FrameRenderer`）。
 - **默认零第三方 SPM 依赖**（当前仅有 `swift-markdown` 一个例外）；引入任何新依赖需要在 plan 中明确论证并经用户批准。
 - **性能预算**：文件读取 80 MB 上限、富格式化 8 MB 上限、语法高亮 1.5M UTF-16 上限（分别定义在 `TextFileLoader` / `PreviewRenderer` / `SyntaxHighlighter`），新功能不得绕过。
 - **主线程纪律**：重计算（高亮、大文件格式化）放在后台线程，UI 更新回主线程。

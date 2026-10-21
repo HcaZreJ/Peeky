@@ -96,9 +96,24 @@ let package = Package(
             dependencies: ["PeekyKit"],
             path: "Sources/Peeky"
         ),
+        // Terminal UI: opens a file inside the current terminal split.
+        .target(
+            name: "PeekTUI",
+            dependencies: [
+                "PeekyCore",
+                .product(name: "Markdown", package: "swift-markdown")
+            ],
+            path: "Sources/PeekTUI",
+            swiftSettings: [.unsafeFlags(["-enable-testing"])]
+        ),
+        .executableTarget(
+            name: "peek-tui",
+            dependencies: ["PeekTUI"],
+            path: "Sources/peek-tui"
+        ),
         .executableTarget(
             name: "PeekyTests",
-            dependencies: ["PeekyKit", "PeekyCore"],
+            dependencies: ["PeekyKit", "PeekyCore", "PeekTUI"],
             path: "Tests",
             swiftSettings: testSwiftSettings,
             linkerSettings: testLinkerSettings
