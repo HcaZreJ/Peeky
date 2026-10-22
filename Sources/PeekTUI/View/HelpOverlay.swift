@@ -23,6 +23,7 @@ package enum Keymap {
         KeymapEntry(keys: "y  ⌘C", action: "复制选中内容（没有选中时复制当前行）"),
         KeymapEntry(keys: "Y", action: "复制全文"),
         KeymapEntry(keys: "n / p / P", action: "复制文件名 / 绝对路径 / 仓库内相对路径"),
+        KeymapEntry(keys: "L", action: "复制「路径:行号」（选中的首行或当前行）"),
         KeymapEntry(keys: "o / e", action: "在 Finder 中显示 / 用默认编辑器打开"),
         KeymapEntry(keys: "r", action: "从磁盘重读"),
         KeymapEntry(keys: "Tab / s", action: "切换焦点 / 显示或收起侧栏"),

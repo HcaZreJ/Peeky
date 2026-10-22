@@ -125,4 +125,19 @@ enum SidebarRenderer {
         }
         return result + "…"
     }
+
+    /// 放不下时从左边截断并以「…」开头，保留结尾（按显示宽度）。
+    static func fittedKeepingEnd(_ text: String, width: Int) -> String {
+        guard width > 0 else { return "" }
+        guard TextWidth.width(of: text) > width else { return text }
+        var result = ""
+        var used = 0
+        for character in text.reversed() {
+            let characterWidth = TextWidth.width(of: character)
+            guard used + characterWidth <= width - 1 else { break }
+            result.insert(character, at: result.startIndex)
+            used += characterWidth
+        }
+        return "…" + result
+    }
 }

@@ -41,8 +41,9 @@ package enum FrameRenderer {
             let wrapHint = state.wrapsLines || layout.markdownRows != nil ? "" : "不换行  "
             let jqPath = document.json?.paths(forSourceLine: cursorSource).map { JSONPathMap.truncatedForDisplay($0.jq, limit: 60) + "  " } ?? ""
             let selected = state.selection.flatMap { $0.isEmpty ? nil : "选中 \(SelectionText.text($0, layout: layout).count) 字符  " } ?? ""
-            statusLeft = state.toast ?? document.progressNote ?? ""
             statusRight = "\(selected)\(jqPath)\(wrapHint)\(position)  \(helpHint)"
+            let leftWidth = state.size.columns - TextWidth.width(of: statusRight) - 3
+            statusLeft = state.toast ?? document.progressNote ?? selectionReferenceHint(state, width: leftWidth) ?? ""
         }
         frame.paste(body, rows: 1..<max(statusRow, 1), atColumn: state.contentOrigin)
         if let sidebar = state.sidebar, sidebar.isVisible {
@@ -52,6 +53,16 @@ package enum FrameRenderer {
         drawStatusBar(&frame, row: statusRow, left: statusLeft, right: statusRight, appearance: appearance)
         if state.isHelpVisible { HelpOverlay.draw(&frame, appearance: appearance) }
         return frame
+    }
+
+    static let referenceKeyHint = "L 复制 "
+
+    /// 有选区时状态栏左侧的「L 复制 路径:行号」；路径放不下时从左边截断，行号始终可见。
+    private static func selectionReferenceHint(_ state: TUIState, width: Int) -> String? {
+        guard let selection = state.selection, !selection.isEmpty, let reference = TUIReducer.lineReference(state) else { return nil }
+        let referenceWidth = width - TextWidth.width(of: referenceKeyHint)
+        guard referenceWidth > 0 else { return nil }
+        return referenceKeyHint + SidebarRenderer.fittedKeepingEnd(reference, width: referenceWidth)
     }
 
     /// 正文用哪套颜色：源码视图固定深色，其余跟随终端。

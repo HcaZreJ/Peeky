@@ -46,7 +46,7 @@
 - **大纲从排版结果派生**：`MarkdownLayout` 排版时给 1–4 级标题的第一行记级别与纯文本标题（`MarkdownRenderer.plainDisplayText`，空标题显示 "Untitled heading"），`MarkdownRendering.outline` 的行号就是排版行号，跳转与画面严格对应。
 - **选区按视觉列记录**：`TextSelection` 的点是「显示行 + 视觉列」（展开制表符、不折行时的列，Markdown 为排版行里含装饰的列），滚动、换行开关都不影响它；换文档、折叠变化、Markdown 重排时清掉。复制由 `SelectionText.text` 换回原文：不同行之间换行，软换行直接拼接，制表符原样；JSON 折叠态换成源区间（`JSONView.expandedText`）。
 - **装饰用 `StyledSpan.copyText` 标出**：nil 复制原文，空串（`StyledSpan.decoration`）不复制，其它值替换（表格单元格之间的竖线复制成制表符）；只有装饰的行（分隔线、表格边框行）整行不复制。Markdown 软换行续行记 `MarkdownRow.joinsPrevious`（折行处去掉了空格时是 " "），复制时接回上一行。
-- **按键处理顺序**：帮助浮层（任意键关闭）→ `:行号` 输入 → 全局键 → 复制与文件动作键（y / ⌘C / Y / n / p / P / o / e）→ 按焦点分给正文或侧栏。字符键先去掉 shift（终端对大写字母与符号的上报有的带 shift）。
+- **按键处理顺序**：帮助浮层（任意键关闭）→ `:行号` 输入 → 全局键 → 复制与文件动作键（y / ⌘C / Y / n / p / P / L / o / e）→ 按焦点分给正文或侧栏。字符键先去掉 shift（终端对大写字母与符号的上报有的带 shift）。
 - **连击与提示计时在运行时**：终端不报告双击，`TUIRuntime` 按两次左键按下的间隔（400 ms）与位置算出 `MouseEvent.clickCount`；提示由 `TUIReducer.showToast` 设置并返回 `.expireToast(token)`，2 秒后令牌仍是最新的才清掉。
 - **明暗以终端实际背景为准**：启动时发 DSR 996 与 OSC 11，OSC 11 回了背景色就按亮度判断（`TUIReducer.appearance(ofBackground:)`），只有 996 时按 996；之后的 996 / 2031 只触发再问一次背景色（`.queryBackground`）。终端的 996 可能跟着系统明暗而不是它自己的配色。明暗存在 `TUIState.appearance`，所有取色都带它；调色板之外的界面色在 `ChromeColors`。源码视图固定 Dark Modern；Markdown 排版结果记着排版时的明暗，与当前不同就重排（`relayoutMarkdownIfNeeded`），浅色下代码块不上 shiki 色。读文件与重排 Markdown 的副作用都带明暗参数。
 - **放大标题（kitty OSC 66）**：启动时在左上角打一个 2 倍空格再问光标位置（`TUIRuntime.textSizingProbe`），光标到第 3 列即 `supportsTextSizing`。放大排版时顶层 H1 / H2 每个折行占上下两个排版行（`MarkdownRow.scaledHeading` 的 part 0 / 1），上半行的片段是不放大时的样子；渲染时两半都在视口里才写放大块（`CellBuffer.writeScaled`：左上格带整段文字，其余是 `isCovered` 格子），否则退回普通样式。`ScreenEncoder` 把前后帧里含放大块的行作为一组：组内有变化就先全部 `ESC[2K` 再整行重画——在放大格上写普通字会让 kitty 擦掉整个大字。排版结果记着是否放大，与终端能力不同就重排。
