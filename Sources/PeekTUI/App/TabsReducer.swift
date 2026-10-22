@@ -43,7 +43,7 @@ extension TUIReducer {
         switch state.document {
         case .loading:
             state.advanceGeneration()
-            return [.load(url: url, generation: state.generation, width: state.contentColumns, isReload: false, appearance: state.appearance, scaledHeadings: state.supportsTextSizing)]
+            return [.load(url: url, generation: state.generation, width: state.contentColumns, isReload: false, appearance: state.appearance, scaledHeadings: state.supportsTextSizing, images: imageContext(state, file: url))]
         case .failed:
             return reload(&state)
         case .noFile:

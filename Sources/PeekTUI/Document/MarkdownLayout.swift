@@ -64,6 +64,27 @@ package struct MarkdownRow: Equatable, Sendable {
     package var joinsPrevious: String?
     /// 放大标题（kitty OSC 66）的上半行或下半行；上半行的 `spans` 是不放大时的样子
     package var scaledHeading: ScaledHeading?
+    /// 这一行是一张图（Unicode 占位符）的一部分：图要先传给终端才显示得出来
+    package var image: TerminalImage?
+}
+
+/// 排版时显示图片的条件，终端支持 kitty 图片协议的 Unicode 占位符时才有。
+package struct MarkdownImageContext: Equatable, Sendable {
+    /// 一张图最多占几行。
+    package static let maximumRows = 30
+
+    /// 一格的像素尺寸
+    package var cell: PixelSize
+    /// 已读到的本地图片像素尺寸，按绝对路径；还没读到的图按文字显示
+    package var sizes: [String: PixelSize]
+    /// 文档所在目录：图片的相对路径据此解析
+    package var baseDirectory: URL?
+
+    package init(cell: PixelSize, sizes: [String: PixelSize] = [:], baseDirectory: URL?) {
+        self.cell = cell
+        self.sizes = sizes
+        self.baseDirectory = baseDirectory
+    }
 }
 
 /// 放大标题的一个折行：占上下两个排版行。`column` 是放大块左上格所在的列（含左边距）。
@@ -93,6 +114,10 @@ package struct MarkdownRendering: Equatable, Sendable {
     package var appearance: PeekyPalette.Appearance = .dark
     /// 排版时 H1 / H2 是否按放大文字排（每个折行两行）；与终端能力不同时重排
     package var scaledHeadings = false
+    /// 排版时显示图片的条件；与当前不同（终端能力、读到的图片尺寸）时重排
+    package var imageContext: MarkdownImageContext?
+    /// 文档里本地图片的绝对路径（按出现顺序、不重复），有图片条件时才收集；运行时据此读尺寸
+    package var imageSources: [String] = []
 }
 
 extension MarkdownTheme {
@@ -117,12 +142,14 @@ package enum MarkdownLayout {
         width: Int,
         theme: MarkdownTheme,
         codeTokens: [Int: [[HighlightedToken]]] = [:],
-        scaledHeadings: Bool = false
+        scaledHeadings: Bool = false,
+        images: MarkdownImageContext? = nil
     ) -> MarkdownRendering {
         let (frontmatter, body, bodyOffset) = splitFrontmatter(source)
         let contentWidth = max(width - 2 * margin, 10)
         var builder = Builder(theme: theme, codeTokens: codeTokens, lineOffset: bodyOffset)
         builder.scaledHeadings = scaledHeadings
+        builder.images = images
         var lines: [Line] = []
         if !frontmatter.isEmpty {
             lines = frontmatter.enumerated().map { index, text in
@@ -157,10 +184,46 @@ package enum MarkdownLayout {
                     var shifted = heading
                     shifted.column += margin
                     return shifted
-                }
+                },
+                image: line.image
             )
         }
-        return MarkdownRendering(rows: rows, width: width, outline: outline, appearance: theme.appearance, scaledHeadings: scaledHeadings)
+        return MarkdownRendering(
+            rows: rows,
+            width: width,
+            outline: outline,
+            appearance: theme.appearance,
+            scaledHeadings: scaledHeadings,
+            imageContext: images,
+            imageSources: builder.imageSources
+        )
+    }
+
+    /// 本地图片的绝对路径：不带 scheme 的地址（去掉 `?…` / `#…`、解百分号编码）相对文档目录解析，
+    /// `file:` 地址取其路径；网络地址与 `data:` 为 nil。
+    static func localImagePath(_ source: String, baseDirectory: URL?) -> String? {
+        if let url = URL(string: source), let scheme = url.scheme, !scheme.isEmpty {
+            return url.isFileURL ? url.standardizedFileURL.path : nil
+        }
+        let path = String(source.prefix { $0 != "?" && $0 != "#" })
+        guard !path.isEmpty else { return nil }
+        let decoded = path.removingPercentEncoding ?? path
+        if decoded.hasPrefix("/") { return URL(fileURLWithPath: decoded).standardizedFileURL.path }
+        guard let baseDirectory else { return nil }
+        return baseDirectory.appendingPathComponent(decoded).standardizedFileURL.path
+    }
+
+    /// 图占几列几行：不放大（最宽到原图按格子算的列数），不超过 `maxColumns` 与 `maxRows`，
+    /// 按格子的像素比例保持长宽比。
+    static func imageCells(_ size: PixelSize, cell: PixelSize, maxColumns: Int, maxRows: Int) -> (columns: Int, rows: Int) {
+        let aspect = Double(size.height) / Double(size.width)
+        var columns = min(maxColumns, max(1, Int((Double(size.width) / Double(cell.width)).rounded(.up))))
+        var rows = max(1, Int((Double(columns * cell.width) * aspect / Double(cell.height)).rounded()))
+        if rows > maxRows {
+            rows = maxRows
+            columns = max(1, min(columns, Int((Double(rows * cell.height) / aspect / Double(cell.width)).rounded())))
+        }
+        return (min(columns, ImagePlaceholder.maximumCells), min(rows, ImagePlaceholder.maximumCells))
     }
 
     /// 文档里的代码块（按出现顺序编号，与排版时的编号一致），供运行时逐块高亮。
@@ -213,6 +276,7 @@ package enum MarkdownLayout {
         var heading: (level: Int, title: String)?
         var joinsPrevious: String?
         var scaledHeading: ScaledHeading?
+        var image: TerminalImage?
     }
 
     private enum InlinePiece {
@@ -230,6 +294,10 @@ package enum MarkdownLayout {
         /// H1 / H2 按放大文字排；只放大顶层标题（列表、引用的前缀会让放大块错位）
         var scaledHeadings = false
         var containerDepth = 0
+        /// 显示图片的条件；nil 时图片一律按文字显示
+        var images: MarkdownImageContext?
+        /// 遇到的本地图片（绝对路径，不重复）
+        var imageSources: [String] = []
 
         init(theme: MarkdownTheme, codeTokens: [Int: [[HighlightedToken]]], lineOffset: Int) {
             self.theme = theme
@@ -261,6 +329,7 @@ package enum MarkdownLayout {
             case let heading as Heading:
                 return self.heading(heading, width: width)
             case let paragraph as Paragraph:
+                if let lines = blockImage(paragraph, width: width, sourceLine: line) { return lines }
                 return wrapInline(Array(paragraph.children), style: .plain, width: width, sourceLine: line)
             case let list as UnorderedList:
                 return self.list(Array(list.listItems), ordered: nil, width: width)
@@ -280,6 +349,51 @@ package enum MarkdownLayout {
                 }
             default:
                 return blocks(Array(markup.children), width: width)
+            }
+        }
+
+        /// 记下一张本地图片的路径（有图片条件时）；返回它的绝对路径。
+        @discardableResult
+        mutating func recordImage(_ source: String) -> String? {
+            guard let images, let path = MarkdownLayout.localImagePath(source, baseDirectory: images.baseDirectory) else { return nil }
+            if !imageSources.contains(path) { imageSources.append(path) }
+            return path
+        }
+
+        /// 单独成段的本地图片（可以外面包一层链接）排成占位符行；尺寸还没读到、读不了，或段落里
+        /// 不止一张图时返回 nil，按文字显示。第一行复制成「[图片] 说明」并带链接，其余行是装饰。
+        mutating func blockImage(_ paragraph: Paragraph, width: Int, sourceLine line: Int) -> [Line]? {
+            guard let images else { return nil }
+            let children = paragraph.children.filter { child in
+                if child is SoftBreak { return false }
+                if let text = child as? Text { return !text.string.allSatisfy(\.isWhitespace) }
+                return true
+            }
+            guard children.count == 1 else { return nil }
+            var node: Markup = children[0]
+            var target: String?
+            if let link = node as? Link, link.childCount == 1, let inner = link.child(at: 0) as? Image {
+                target = link.destination
+                node = inner
+            }
+            guard let image = node as? Image, let source = image.source, let path = recordImage(source),
+                  let size = images.sizes[path], !size.isEmpty
+            else { return nil }
+            let cells = MarkdownLayout.imageCells(size, cell: images.cell, maxColumns: width, maxRows: MarkdownImageContext.maximumRows)
+            let terminalImage = TerminalImage(content: .file(path: path), columns: cells.columns, rows: cells.rows, cell: images.cell)
+            let alt = image.children.compactMap { ($0 as? Text)?.string }.joined()
+            let style = CellStyle(foreground: ImagePlaceholder.color(for: terminalImage.id))
+            return (0..<terminalImage.rows).map { row in
+                Line(
+                    spans: [StyledSpan(
+                        text: ImagePlaceholder.rowText(row: row, columns: terminalImage.columns),
+                        style: style,
+                        copyText: row == 0 ? "[图片] " + (alt.isEmpty ? source : alt) : ""
+                    )],
+                    sourceLine: line,
+                    links: row == 0 ? [target ?? source] : [],
+                    image: terminalImage
+                )
             }
         }
 
@@ -574,6 +688,7 @@ package enum MarkdownLayout {
                 return link.children.flatMap { inline($0, style: linkStyle, target: destination) }
             case let image as Image:
                 let source = image.source ?? ""
+                recordImage(source)
                 var imageStyle = style
                 imageStyle.foreground = theme.muted
                 imageStyle.link = Self.resolvedLink(source)

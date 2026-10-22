@@ -37,6 +37,7 @@ package enum FrameRenderer {
             let layout = DocumentLayout(document: document, columns: state.contentColumns, wrapsLines: state.wrapsLines, appearance: appearance)
             let contentAppearance = contentAppearance(for: document, appearance: appearance)
             drawContent(&body, layout: layout, viewport: state.viewport, height: state.contentHeight, appearance: contentAppearance)
+            frame.images = visibleImages(layout: layout, viewport: state.viewport, height: state.contentHeight)
             if let search = state.search, !search.matches.isEmpty {
                 drawSearchMatches(&body, search: search, layout: layout, viewport: state.viewport, height: state.contentHeight, colors: ChromeColors.forAppearance(contentAppearance))
             }
@@ -73,6 +74,17 @@ package enum FrameRenderer {
         let referenceWidth = width - TextWidth.width(of: referenceKeyHint)
         guard referenceWidth > 0 else { return nil }
         return referenceKeyHint + SidebarRenderer.fittedKeepingEnd(reference, width: referenceWidth)
+    }
+
+    /// 视口里出现的图（按出现顺序、不重复）。
+    private static func visibleImages(layout: DocumentLayout, viewport: Viewport, height: Int) -> [TerminalImage] {
+        guard let rows = layout.markdownRows else { return [] }
+        var images: [TerminalImage] = []
+        for position in viewport.visibleRows(lineCount: layout.lineCount, height: height, rows: layout.rows) {
+            guard let position, position.line < rows.count, let image = rows[position.line].image, !images.contains(image) else { continue }
+            images.append(image)
+        }
+        return images
     }
 
     /// 正文用哪套颜色：源码视图固定深色，其余跟随终端。

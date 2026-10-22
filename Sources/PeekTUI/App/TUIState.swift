@@ -62,6 +62,10 @@ package struct OpenedDocument: Equatable, Sendable {
     package let formattingPending: Bool
     /// 读入时的文件戳；目录监听报告变化时与磁盘上的比较。
     package let stamp: FileStamp?
+    /// Markdown 里本地图片的像素尺寸（按绝对路径；读不了的记 `PixelSize.unreadable`）。
+    package var imageSizes: [String: PixelSize] = [:]
+    /// 已经请运行时去读尺寸的图片，免得重排时重复去读。
+    package var requestedImages: Set<String> = []
 
     package init(
         header: DocumentHeader,
@@ -371,6 +375,19 @@ package struct TUIState: Equatable, Sendable {
     package var supportsTextSizing = false
     /// 最近打开的文件（与 app 共用的记录），启动时与每次记一笔之后由运行时送来。
     package var recentFiles: [RecentFiles.Item] = []
+    /// 终端名（XTVERSION 回复，如 `kitty(0.49.2)`、`ghostty 1.3.1`）。
+    package var terminalName: String?
+    /// 一格的像素尺寸（`CSI 16 t` 回复）。
+    package var cellPixelSize: PixelSize?
+    /// 终端回答了 kitty 图片协议的探测（`a=q` 回 OK）。
+    package var graphicsReady = false
+
+    /// 能显示图片：终端是 kitty 或 Ghostty（两者都支持图片协议的 Unicode 占位符）、回答了图片协议探测、
+    /// 报了格子像素尺寸。
+    package var supportsImages: Bool {
+        guard graphicsReady, cellPixelSize != nil, let name = terminalName?.lowercased() else { return false }
+        return name.hasPrefix("kitty") || name.hasPrefix("ghostty")
+    }
 
     /// 打开一个文档（测试用）：`.noFile` 不算打开了文件。
     package init(size: TerminalSize, document: DocumentState, targetLine: Int? = nil) {

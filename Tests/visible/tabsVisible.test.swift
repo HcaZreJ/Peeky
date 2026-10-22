@@ -28,7 +28,7 @@ private func press(_ state: inout TUIState, _ key: Key, _ modifiers: KeyModifier
 
 private func loadEffects(_ effects: [TUIEffect]) -> [(URL, Int)] {
     effects.compactMap { effect in
-        if case let .load(url, generation, _, _, _, _) = effect { return (url, generation) }
+        if case let .load(url, generation, _, _, _, _, _) = effect { return (url, generation) }
         return nil
     }
 }

@@ -18,6 +18,8 @@ package final class TUIRuntime {
     private var watcher: DirectoryWatcher?
     /// 正在进行的搜索；发起新搜索时取消它。
     private var searchTask: Task<Void, Never>?
+    /// 已经传给终端（或正在准备）的图片编号；退出时删掉，挂起回来后终端里已经没有了，清空重传。
+    private var sentImages: Set<UInt32> = []
     /// 上一次按下鼠标的时间、位置与连击次数，用来认双击 / 三击。
     private var lastPress: (time: ContinuousClock.Instant, row: Int, column: Int, count: Int)?
 
@@ -53,13 +55,16 @@ package final class TUIRuntime {
     static let backgroundQuery = "\u{1B}]11;?\u{1B}\\"
     /// 启动时问终端明暗：DSR 996（回 `CSI ? 997 ; 1|2 n`）与背景色；回复经输入解析送进 reducer。
     static let appearanceQueries = "\u{1B}[?996n" + backgroundQuery
+    /// 启动时问显示图片要的三样：格子像素尺寸（`CSI 16 t`）、终端名（XTVERSION）、kitty 图片协议（`a=q`，
+    /// 支持的终端回 `ESC _ G i=31;OK ESC \`）。
+    static let imageQueries = "\u{1B}[16t\u{1B}[>0q\u{1B}_Gi=\(TUIReducer.graphicsProbeID),s=1,v=1,a=q,t=d,f=24;AAAA\u{1B}\\"
     /// 放大文字探测：在左上角打一个 2 倍空格（OSC 66）再问光标位置（CPR），随后清屏。
     /// 支持的终端光标到第 3 列；不认识 OSC 66 的终端忽略它，光标停在第 1 列。
     static let textSizingProbe = "\u{1B}[H\u{1B}]66;s=2; \u{07}\u{1B}[6n\u{1B}[2J\u{1B}[H"
 
     package func start() {
         terminal.enter()
-        terminal.write(Self.textSizingProbe + Self.appearanceQueries)
+        terminal.write(Self.textSizingProbe + Self.appearanceQueries + Self.imageQueries)
         installSources()
         render()
         dispatch(.launched)
@@ -79,12 +84,13 @@ package final class TUIRuntime {
     private func perform(_ effect: TUIEffect) {
         switch effect {
         case .quit:
+            terminal.write(sentImages.map(ImagePlaceholder.deletion).joined())
             terminal.restore()
             exit(0)
         case .suspend:
             suspend()
-        case let .load(url, generation, width, isReload, appearance, scaledHeadings):
-            loadDocument(url: url, generation: generation, width: width, isReload: isReload, appearance: appearance, scaledHeadings: scaledHeadings)
+        case let .load(url, generation, width, isReload, appearance, scaledHeadings, images):
+            loadDocument(url: url, generation: generation, width: width, isReload: isReload, style: (appearance, scaledHeadings, images))
         case let .listDirectory(directory):
             Task.detached(priority: .userInitiated) { [weak self] in
                 let listing = Self.list(directory)
@@ -101,9 +107,9 @@ package final class TUIRuntime {
             startHighlight(generation: generation, text: text, language: language)
         case let .highlightMarkdownCode(generation, source):
             highlightMarkdownCode(generation: generation, source: source)
-        case let .layoutMarkdown(generation, source, width, codeTokens, appearance, scaledHeadings):
+        case let .layoutMarkdown(generation, source, width, codeTokens, appearance, scaledHeadings, images):
             Task.detached(priority: .userInitiated) { [weak self] in
-                let rendering = MarkdownLayout.render(source, width: width, theme: .forAppearance(appearance), codeTokens: codeTokens, scaledHeadings: scaledHeadings)
+                let rendering = MarkdownLayout.render(source, width: width, theme: .forAppearance(appearance), codeTokens: codeTokens, scaledHeadings: scaledHeadings, images: images)
                 await self?.dispatch(.markdownLaidOut(rendering, generation: generation))
             }
         case let .open(target, baseDirectory):
@@ -132,6 +138,14 @@ package final class TUIRuntime {
             Task.detached(priority: .utility) { [weak self] in
                 let items = Self.recentFileItems(RecentFiles.record(url))
                 await self?.dispatch(.recentFilesLoaded(items))
+            }
+        case let .probeImages(paths, generation):
+            Task.detached(priority: .utility) { [weak self] in
+                var sizes: [String: PixelSize] = [:]
+                for path in paths {
+                    sizes[path] = ImageRasterizer.pixelSize(ofImageAt: path) ?? .unreadable
+                }
+                await self?.dispatch(.imagesProbed(sizes, generation: generation))
             }
         case let .discoverTreeRoot(url):
             Task.detached(priority: .userInitiated) { [weak self] in
@@ -295,6 +309,8 @@ package final class TUIRuntime {
 
     /// Ctrl-Z：还原终端交还给 shell；`fg` 回来后重新进入并整屏重画。
     private func suspend() {
+        terminal.write(sentImages.map(ImagePlaceholder.deletion).joined())
+        sentImages = []
         terminal.restore()
         signal(SIGTSTP, SIG_DFL)
         raise(SIGTSTP)
@@ -366,15 +382,17 @@ package final class TUIRuntime {
     // MARK: - 读文件
 
     /// 读文件、格式化、切行在后台任务里做（不继承主线程隔离），结果分阶段回主线程派发。
-    private func loadDocument(url: URL, generation: Int, width: Int, isReload: Bool, appearance: PeekyPalette.Appearance, scaledHeadings: Bool) {
+    private func loadDocument(url: URL, generation: Int, width: Int, isReload: Bool, style: DocumentStyle) {
         Task.detached(priority: .userInitiated) { [weak self] in
             let runtime = self
-            let style = (appearance: appearance, scaledHeadings: scaledHeadings)
             await Self.loadStages(url: url, generation: generation, width: width, isReload: isReload, style: style) { event in
                 await runtime?.dispatch(event)
             }
         }
     }
+
+    /// Markdown 的排版条件：明暗、标题是否放大、显示图片的条件。
+    typealias DocumentStyle = (appearance: PeekyPalette.Appearance, scaledHeadings: Bool, images: MarkdownImageContext?)
 
     /// 超过这个大小、又需要格式化的文件（JSON / JSONL / XML / plist）先显示原文，格式化好了再替换。
     nonisolated static let progressiveThreshold = 1 * 1024 * 1024
@@ -386,7 +404,7 @@ package final class TUIRuntime {
         generation: Int,
         width: Int,
         isReload: Bool,
-        style: (appearance: PeekyPalette.Appearance, scaledHeadings: Bool),
+        style: DocumentStyle,
         emit: @Sendable (TUIEvent) async -> Void
     ) async {
         var trace = PhaseTrace(url.lastPathComponent)
@@ -415,7 +433,7 @@ package final class TUIRuntime {
         trace.mark("格式化")
         let header = DocumentHeaderBuilder.make(loaded: loaded, prepared: prepared, modifiedAt: modifiedAt, repoRoot: repoRoot)
         let markdown = prepared.presentation == .markdown
-            ? MarkdownLayout.render(prepared.text, width: width, theme: .forAppearance(style.appearance), scaledHeadings: style.scaledHeadings)
+            ? MarkdownLayout.render(prepared.text, width: width, theme: .forAppearance(style.appearance), scaledHeadings: style.scaledHeadings, images: style.images)
             : nil
         let store = LineStore(prepared.text)
         trace.mark("排版与切行")
@@ -428,6 +446,7 @@ package final class TUIRuntime {
             baseDirectory: url.deletingLastPathComponent(),
             stamp: stamp
         )
+        document.imageSizes = style.images?.sizes ?? [:]
         guard prepared.presentation.isJSON else {
             await emit(.loaded(document, generation: generation))
             return
@@ -470,7 +489,25 @@ package final class TUIRuntime {
         let frame = FrameRenderer.render(state)
         let update = ScreenEncoder.encode(previous: lastFrame, next: frame)
         lastFrame = frame
+        sendImages(frame.images)
         guard !update.isEmpty else { return }
         terminal.write("\u{1B}[?2026h" + update + "\u{1B}[?2026l")
+    }
+
+    private func writeToTerminal(_ text: String) {
+        terminal.write(text)
+    }
+
+    /// 把这一帧里还没传过的图在后台画成 PNG，画好后传给终端（占位符已经在屏幕上，图一到就显示）。
+    /// 画不出来的图也记为已传，不反复重试。
+    private func sendImages(_ images: [TerminalImage]) {
+        for image in images where !sentImages.contains(image.id) {
+            sentImages.insert(image.id)
+            Task.detached(priority: .utility) { [weak self] in
+                guard let png = ImageRasterizer.png(for: image) else { return }
+                let escape = ImagePlaceholder.transmission(id: image.id, png: png, columns: image.columns, rows: image.rows)
+                await self?.writeToTerminal(escape)
+            }
+        }
     }
 }

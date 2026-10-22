@@ -123,7 +123,7 @@ struct Visible_sidebar {
         let width = SidebarState.width(forColumns: 70)
         #expect(state.contentColumns == 70 - width - 1)
         #expect(effects.contains { effect in
-            if case let .layoutMarkdown(_, _, layoutWidth, _, _, _) = effect { return layoutWidth == state.contentColumns }
+            if case let .layoutMarkdown(_, _, layoutWidth, _, _, _, _) = effect { return layoutWidth == state.contentColumns }
             return false
         })
         #expect(FrameRenderer.render(state)[2, width].text == "│")
