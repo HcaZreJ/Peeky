@@ -22,7 +22,7 @@ extension TUIReducer {
         case (.character("Y"), []):
             guard let file = state.activeFile else { return [] }
             return [.copyFileText(file), showToast("已复制全文", state: &state)]
-        case (.character("n"), []):
+        case (.character("F"), []):
             guard let file = state.activeFile else { return [] }
             return [.copy(text: file.lastPathComponent, description: "文件名"), showToast("已复制文件名", state: &state)]
         case (.character("p"), []):
@@ -32,6 +32,9 @@ extension TUIReducer {
             guard let file = state.activeFile else { return [] }
             guard let root = state.repoRoot else { return [showToast(noRepositoryToast, state: &state)] }
             return [.copy(text: relativePath(of: file, root: root), description: "相对路径"), showToast("已复制相对路径", state: &state)]
+        case (.character("L"), []):
+            guard let reference = lineReference(state) else { return [] }
+            return [.copy(text: reference, description: "路径:行号"), showToast("已复制路径:行号", state: &state)]
         case (.character("o"), []):
             return state.activeFile.map { [.reveal($0)] } ?? []
         case (.character("e"), []):
@@ -39,6 +42,13 @@ extension TUIReducer {
         default:
             return nil
         }
+    }
+
+    /// 「绝对路径:行号」（与 app 的 path:line chip 一致）：行号取选区起点所在的源行，没有选区时取光标行，1 起算。
+    static func lineReference(_ state: TUIState) -> String? {
+        guard let file = state.activeFile, case let .loaded(document) = state.document else { return nil }
+        let line = state.selection.flatMap { $0.isEmpty ? nil : $0.start.line } ?? state.viewport.cursor
+        return "\(file.path):\(document.sourceLine(forLine: line) + 1)"
     }
 
     /// 相对版本库根的路径，不带仓库名（与 app 的「Copy Relative Path」一致）。

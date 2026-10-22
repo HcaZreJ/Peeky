@@ -40,7 +40,7 @@ private func scrolledState() -> TUIState {
 
 private func reloads(_ effects: [TUIEffect]) -> Bool {
     effects.contains { effect in
-        if case let .load(url, _, _, isReload, _, _) = effect { return url == file && isReload }
+        if case let .load(url, _, _, isReload, _, _, _) = effect { return url == file && isReload }
         return false
     }
 }

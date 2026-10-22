@@ -147,4 +147,19 @@ struct Visible_recentFiles {
         #expect(items[2].reason == "File moved or deleted")
         #expect(items[2].tooltip == "~/Downloads/events.jsonl\nNo file at this path anymore.")
     }
+
+    @Test("记一笔时先读存着的最新列表：另一个进程（app 或终端版）刚记的条目不会被盖掉")
+    func recordKeepsEntriesWrittenElsewhere() throws {
+        let suite = "peeky-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let first = URL(fileURLWithPath: "/tmp/peeky-recent-a.md")
+        let second = URL(fileURLWithPath: "/tmp/peeky-recent-b.md")
+        RecentFiles.record(first, at: Date(timeIntervalSince1970: 1), in: defaults)
+        // 另一边记了一条
+        RecentFiles.save([entry("/tmp/elsewhere.md", at: 2)] + RecentFiles.load(from: defaults), to: defaults)
+        let entries = RecentFiles.record(second, at: Date(timeIntervalSince1970: 3), in: defaults)
+        #expect(entries.map(\.path) == [second.path, "/tmp/elsewhere.md", first.path])
+        #expect(RecentFiles.load(from: defaults) == entries)
+    }
 }

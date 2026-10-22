@@ -87,7 +87,7 @@ struct Visible_headingStyle {
         let effects = TUIReducer.reduce(&probing, .input(.cursorPosition(row: 1, column: 3)))
         #expect(probing.supportsTextSizing)
         #expect(effects.contains { effect in
-            if case let .layoutMarkdown(_, _, _, _, _, scaledHeadings) = effect { return scaledHeadings }
+            if case let .layoutMarkdown(_, _, _, _, _, scaledHeadings, _) = effect { return scaledHeadings }
             return false
         })
     }

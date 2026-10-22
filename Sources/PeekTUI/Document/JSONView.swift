@@ -74,6 +74,15 @@ package struct JSONView: Equatable, Sendable {
         recompose(sourceText: sourceText)
     }
 
+    /// 展开包住这一源行的折叠（开头行本身露在折叠行上，不算被包住）；有展开的返回 true。
+    package mutating func reveal(sourceLine line: Int, sourceText: String) -> Bool {
+        let hiding = foldMap.regions.filter { collapsed.contains($0.openLine) && $0.openLine < line && line <= $0.closeLine }
+        guard !hiding.isEmpty else { return false }
+        collapsed.subtract(hiding.map(\.openLine))
+        recompose(sourceText: sourceText)
+        return true
+    }
+
     package mutating func expandAll() {
         collapsed = []
         composition = nil

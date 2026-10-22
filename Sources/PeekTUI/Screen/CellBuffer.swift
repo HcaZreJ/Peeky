@@ -109,6 +109,8 @@ package struct CellBuffer: Equatable, Sendable {
     package let columns: Int
     package let rows: Int
     package private(set) var cells: [Cell]
+    /// 这一帧里出现的图（占位符所指的图）：运行时据此把还没传过的图传给终端
+    package var images: [TerminalImage] = []
 
     package init(columns: Int, rows: Int) {
         self.columns = max(columns, 0)

@@ -88,4 +88,8 @@ package enum InputEvent: Equatable, Sendable {
     case keyboardProtocolFlags(Int)
     /// OSC 11 背景色回复，分量 0–255
     case backgroundColor(red: Int, green: Int, blue: Int)
+    /// 格子像素尺寸回复（`CSI 16 t` → `CSI 6 ; 高 ; 宽 t`）
+    case cellPixelSize(width: Int, height: Int)
+    /// kitty 图片协议的应答：`ESC _ G i=编号 ; 消息 ESC \`（消息为 OK 或错误码）
+    case graphicsReply(id: Int, message: String)
 }

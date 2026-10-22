@@ -89,4 +89,13 @@ struct Visible_inputParser {
             .focus(false),
         ])
     }
+
+    @Test("图片能力回复：格子像素尺寸 CSI 6;高;宽 t、kitty 图片协议应答（可跨两次读取）")
+    func imageCapabilityReports() {
+        var parser = InputParser()
+        let first = parser.feed(bytes("\u{1B}[6;25;14t\u{1B}_Gi=31;O"))
+        let second = parser.feed(bytes("K\u{1B}\\\u{1B}_Gi=7;ENOENT:no such file\u{1B}\\"))
+        #expect(first == [.cellPixelSize(width: 14, height: 25)])
+        #expect(second == [.graphicsReply(id: 31, message: "OK"), .graphicsReply(id: 7, message: "ENOENT:no such file")])
+    }
 }

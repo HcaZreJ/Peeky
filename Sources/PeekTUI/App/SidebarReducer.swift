@@ -54,7 +54,7 @@ extension TUIReducer {
         return setSidebarVisible(!sidebar.isVisible, state: &state)
     }
 
-    /// 1 / 2：切到 Files / Contents 并把焦点给侧栏；没有大纲的文档不能切到 Contents。
+    /// 1 / 2 / 3：切到 Open / Files / Contents 并把焦点给侧栏；没有大纲的文档不能切到 Contents。
     static func showSidebarTab(_ tab: SidebarTab, state: inout TUIState) -> [TUIEffect] {
         guard state.sidebar != nil else { return [] }
         if tab == .contents, state.outline.isEmpty {
@@ -72,12 +72,17 @@ extension TUIReducer {
         return contentWidthChanged(&state)
     }
 
-    /// 焦点进侧栏；在大纲里时选中光标所在的那一节。
+    /// 焦点进侧栏；在大纲里时选中光标所在的那一节，在 Open 里时选中当前文件。
     private static func focusSidebar(_ state: inout TUIState) {
         state.focus = .sidebar
-        if state.sidebarTab == .contents {
+        switch state.sidebarTab {
+        case .contents:
             let current = currentOutlineIndex(state)
             state.sidebar?.outlineSelection = current
+        case .open:
+            if let active = state.activeTabIndex { state.sidebar?.openSelection = active }
+        case .files:
+            break
         }
         keepSidebarSelectionVisible(&state)
     }
@@ -104,6 +109,12 @@ extension TUIReducer {
         sidebar.outlineSelection = min(sidebar.outlineSelection, max(outline.count - 1, 0))
         sidebar.outlineTop = SidebarState.top(showing: sidebar.outlineSelection, currentTop: sidebar.outlineTop, height: height)
         sidebar.outlineTop = min(sidebar.outlineTop, max(outline.count - height, 0))
+        let openRows = state.openListRows
+        if !openRows.indices.contains(sidebar.openSelection) || !openRows[sidebar.openSelection].isSelectable {
+            sidebar.openSelection = openRows.firstIndex { $0.isSelectable } ?? 0
+        }
+        sidebar.openTop = SidebarState.top(showing: sidebar.openSelection, currentTop: sidebar.openTop, height: height)
+        sidebar.openTop = min(sidebar.openTop, max(openRows.count - height, 0))
         state.sidebar = sidebar
     }
 
@@ -114,12 +125,19 @@ extension TUIReducer {
             state.focus = .content
             return []
         }
-        let count = state.sidebarTab == .files ? selectableTreeRows(state).count : state.outline.count
+        let count: Int
+        switch state.sidebarTab {
+        case .open: count = selectableOpenRows(state).count
+        case .files: count = selectableTreeRows(state).count
+        case .contents: count = state.outline.count
+        }
         if let target = movedIndex(press, current: selectionIndex(state), count: count, height: sidebarListHeight(state)) {
             select(index: target, state: &state)
             return []
         }
         switch state.sidebarTab {
+        case .open:
+            return handleOpenKey(press, state: &state)
         case .files:
             return handleTreeKey(press, state: &state)
         case .contents:
@@ -159,10 +177,17 @@ extension TUIReducer {
         state.sidebar?.tree.rows().filter { $0.entry != nil } ?? []
     }
 
+    /// Open 页里能选中的行在 `openListRows` 里的下标。
+    private static func selectableOpenRows(_ state: TUIState) -> [Int] {
+        state.openListRows.indices.filter { state.openListRows[$0].isSelectable }
+    }
+
     /// 当前选中项在列表里的下标。
     private static func selectionIndex(_ state: TUIState) -> Int {
         guard let sidebar = state.sidebar else { return 0 }
         switch state.sidebarTab {
+        case .open:
+            return selectableOpenRows(state).firstIndex(of: sidebar.openSelection) ?? 0
         case .files:
             return selectableTreeRows(state).firstIndex { $0.entry?.path == sidebar.selectedPath } ?? 0
         case .contents:
@@ -172,6 +197,10 @@ extension TUIReducer {
 
     private static func select(index: Int, state: inout TUIState) {
         switch state.sidebarTab {
+        case .open:
+            let rows = selectableOpenRows(state)
+            guard rows.indices.contains(index) else { return }
+            state.sidebar?.openSelection = rows[index]
         case .files:
             let rows = selectableTreeRows(state)
             guard rows.indices.contains(index) else { return }
@@ -223,6 +252,35 @@ extension TUIReducer {
         return willExpand ? [.listDirectory(entry.url)] : []
     }
 
+    /// Open 页：回车切到选中的文件并把焦点交回正文，l / → 切过去、焦点留在侧栏。
+    private static func handleOpenKey(_ press: KeyPress, state: inout TUIState) -> [TUIEffect] {
+        switch (press.key, press.modifiers) {
+        case (.enter, []):
+            let effects = openSelectedRow(state: &state)
+            state.focus = .content
+            return effects
+        case (.character("l"), []), (.right, []):
+            return openSelectedRow(state: &state)
+        default:
+            return []
+        }
+    }
+
+    /// 打开 Open 页里选中的那一行：打开的文件切过去，最近文件打开它。
+    private static func openSelectedRow(state: inout TUIState) -> [TUIEffect] {
+        guard let sidebar = state.sidebar else { return [] }
+        let rows = state.openListRows
+        guard rows.indices.contains(sidebar.openSelection) else { return [] }
+        switch rows[sidebar.openSelection] {
+        case let .tab(index):
+            return activateTab(index, state: &state)
+        case let .recent(item) where item.isOpenable:
+            return openFile(URL(fileURLWithPath: item.path), state: &state)
+        default:
+            return []
+        }
+    }
+
     private static func handleOutlineKey(_ press: KeyPress, state: inout TUIState) -> [TUIEffect] {
         switch (press.key, press.modifiers) {
         case (.enter, []):
@@ -267,6 +325,11 @@ extension TUIReducer {
         guard let sidebar = state.sidebar else { return [] }
         let listRow = mouse.row - 1 - SidebarState.headerRows
         switch state.sidebarTab {
+        case .open:
+            let index = sidebar.openTop + listRow
+            guard state.openListRows.indices.contains(index), state.openListRows[index].isSelectable else { return [] }
+            state.sidebar?.openSelection = index
+            return openSelectedRow(state: &state)
         case .files:
             let rows = sidebar.tree.rows()
             let index = sidebar.treeTop + listRow
@@ -287,6 +350,8 @@ extension TUIReducer {
         guard var sidebar = state.sidebar else { return }
         let height = sidebarListHeight(state)
         switch state.sidebarTab {
+        case .open:
+            sidebar.openTop = min(max(sidebar.openTop + delta, 0), max(state.openListRows.count - height, 0))
         case .files:
             sidebar.treeTop = min(max(sidebar.treeTop + delta, 0), max(sidebar.tree.rows().count - height, 0))
         case .contents:

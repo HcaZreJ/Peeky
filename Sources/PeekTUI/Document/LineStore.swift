@@ -43,14 +43,29 @@ package struct LineStore: Equatable, Sendable {
         guard index >= 0, index < starts.count else { return "" }
         let utf8 = text.utf8
         let start = utf8.index(utf8.startIndex, offsetBy: starts[index])
-        let endOffsetForLine = index + 1 < starts.count ? starts[index + 1] - 1 : endOffset
-        var end = utf8.index(utf8.startIndex, offsetBy: max(endOffsetForLine, starts[index]))
-        if end > start, index + 1 == starts.count, utf8[utf8.index(before: end)] == 0x0A {
-            end = utf8.index(before: end)
-        }
-        if end > start, utf8[utf8.index(before: end)] == 0x0D {
-            end = utf8.index(before: end)
-        }
+        let end = utf8.index(utf8.startIndex, offsetBy: utf8Range(ofLine: index).upperBound)
         return String(text[start..<end])
+    }
+
+    /// 第 `index` 行在全文里的 UTF-8 区间，不含行尾换行与 `\r`。
+    package func utf8Range(ofLine index: Int) -> Range<Int> {
+        let start = starts[index]
+        var end = max(index + 1 < starts.count ? starts[index + 1] - 1 : endOffset, start)
+        let utf8 = text.utf8
+        func byte(at offset: Int) -> UInt8 { utf8[utf8.index(utf8.startIndex, offsetBy: offset)] }
+        if end > start, index + 1 == starts.count, byte(at: end - 1) == 0x0A { end -= 1 }
+        if end > start, byte(at: end - 1) == 0x0D { end -= 1 }
+        return start..<end
+    }
+
+    /// 全文 UTF-8 偏移 `offset` 所在的行。
+    package func line(containingUTF8Offset offset: Int) -> Int {
+        var low = 0
+        var high = starts.count - 1
+        while low < high {
+            let middle = (low + high + 1) / 2
+            if starts[middle] <= offset { low = middle } else { high = middle - 1 }
+        }
+        return low
     }
 }

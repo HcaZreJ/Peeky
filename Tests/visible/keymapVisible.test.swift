@@ -5,7 +5,7 @@ import Testing
 
 // MARK: - 按键动作可见样例
 //
-// n / p / P 复制文件名 / 绝对路径 / 仓库内相对路径（不在仓库里时只提示）；o 在 Finder 中显示，
+// F / p / P 复制文件名 / 绝对路径 / 仓库内相对路径（不在仓库里时只提示）；o 在 Finder 中显示，
 // e 用默认编辑器打开；⌘C（kitty 键盘协议上报 super+c）同 y；`:行号` 回车跳行；? 打开帮助浮层，
 // 再按任意键关闭。
 
@@ -42,10 +42,10 @@ private func copied(_ effects: [TUIEffect]) -> String? {
 
 @Suite("Visible_keymap")
 struct Visible_keymap {
-    @Test("n / p / P 复制文件名、绝对路径、仓库内相对路径；不在仓库里时 P 只提示")
+    @Test("F / p / P 复制文件名、绝对路径、仓库内相对路径；不在仓库里时 P 只提示")
     func copyNameAndPaths() {
         var current = state(repoRoot: URL(fileURLWithPath: "/repo"))
-        #expect(copied(press(&current, .character("n"))) == "notes.txt")
+        #expect(copied(press(&current, .character("F"), .shift)) == "notes.txt")
         #expect(copied(press(&current, .character("p"))) == "/repo/docs/notes.txt")
         #expect(copied(press(&current, .character("P"), .shift)) == "docs/notes.txt")
         #expect(current.toast == "已复制相对路径")

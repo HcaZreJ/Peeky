@@ -1,6 +1,6 @@
 /// 把终端输入字节流解析成 `InputEvent`。
 ///
-/// - 不完整的序列（被拆在两次读取里的 UTF-8、CSI、DCS、OSC）留在缓冲里，下一次 `feed` 接着解析。
+/// - 不完整的序列（被拆在两次读取里的 UTF-8、CSI、DCS、OSC、APC）留在缓冲里，下一次 `feed` 接着解析。
 /// - 孤立的 ESC 不能马上判定（可能是序列开头），留到读取超时后 `flushPendingEscape` 才算 Esc 键。
 /// - 括号粘贴（`CSI 200~ … CSI 201~`）之间的字节原样收集为一个 `.paste`，结束标记可跨读取。
 package struct InputParser {
@@ -104,6 +104,8 @@ package struct InputParser {
             }
         case UInt8(ascii: "]"):
             return parseStringSequence(at: index) { content in Self.backgroundColorReport(content) }
+        case UInt8(ascii: "_"):
+            return parseStringSequence(at: index) { content in Self.graphicsReply(content) }
         case Self.escape:
             return .parsed([.key(KeyPress(key: .escape))], length: 1)
         default:
@@ -121,7 +123,7 @@ package struct InputParser {
         }
     }
 
-    /// DCS / OSC：内容以 BEL 或 ST（ESC \）结束。
+    /// DCS / OSC / APC：内容以 BEL 或 ST（ESC \）结束。
     private func parseStringSequence(at index: Int, interpret: (String) -> InputEvent?) -> Parsed {
         var cursor = index + 2
         while cursor < buffer.count {
@@ -226,6 +228,9 @@ package struct InputParser {
         case "R":
             guard fields.count == 2, let row = Int(fields[0]), let column = Int(fields[1]) else { return nil }
             return .cursorPosition(row: row, column: column)
+        case "t":
+            guard fields.count == 3, fields[0] == "6", let height = Int(fields[1]), let width = Int(fields[2]), width > 0, height > 0 else { return nil }
+            return .cellPixelSize(width: width, height: height)
         case "I":
             return .focus(true)
         case "O":
@@ -235,6 +240,15 @@ package struct InputParser {
         default:
             return nil
         }
+    }
+
+    /// kitty 图片协议应答的内容：`G` 开头，键值段与消息以 `;` 分开，如 `Gi=31;OK`。
+    private static func graphicsReply(_ content: String) -> InputEvent? {
+        guard content.hasPrefix("G") else { return nil }
+        let parts = content.dropFirst().split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false)
+        let keys = parts.first?.split(separator: ",") ?? []
+        let id = keys.lazy.compactMap { $0.hasPrefix("i=") ? Int($0.dropFirst(2)) : nil }.first ?? 0
+        return .graphicsReply(id: id, message: parts.count > 1 ? String(parts[1]) : "")
     }
 
     /// kitty 键盘协议：`CSI code[:…] ; mods[:event] u`。只取按下与重复，忽略松开。

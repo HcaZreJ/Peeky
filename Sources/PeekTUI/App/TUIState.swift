@@ -62,6 +62,10 @@ package struct OpenedDocument: Equatable, Sendable {
     package let formattingPending: Bool
     /// 读入时的文件戳；目录监听报告变化时与磁盘上的比较。
     package let stamp: FileStamp?
+    /// Markdown 里本地图片的像素尺寸（按绝对路径；读不了的记 `PixelSize.unreadable`）。
+    package var imageSizes: [String: PixelSize] = [:]
+    /// 已经请运行时去读尺寸的图片，免得重排时重复去读。
+    package var requestedImages: Set<String> = []
 
     package init(
         header: DocumentHeader,
@@ -104,6 +108,49 @@ package struct OpenedDocument: Equatable, Sendable {
         if let json { return json.displayLine(forSourceLine: sourceLine) }
         guard let rows = markdown?.rows, !rows.isEmpty else { return sourceLine }
         return rows.firstIndex { $0.sourceLine >= sourceLine } ?? rows.count - 1
+    }
+}
+
+/// 一次搜索：搜索词、陆续到达的匹配（按文档顺序）、当前匹配。
+package struct SearchState: Equatable, Sendable {
+    package let query: String
+    /// 每次发起搜索递增；迟到的结果与它不符时丢弃
+    package let id: Int
+    package var matches: [SearchMatch] = []
+    package var isComplete = false
+    /// 匹配太多，只记了前 `SearchEngine.maximumMatches` 段
+    package var isTruncated = false
+    /// 当前匹配在 `matches` 里的下标（指向一处匹配的第一段）
+    package var current: Int?
+    /// 回车后还没跳过去：结果到达时跳到第一个不早于这一行（搜索坐标）的匹配
+    package var pendingJumpFrom: Int?
+
+    package init(query: String, id: Int, pendingJumpFrom: Int? = nil) {
+        self.query = query
+        self.id = id
+        self.pendingJumpFrom = pendingJumpFrom
+    }
+
+    /// 一处匹配算一个（不算续段）。
+    package var matchCount: Int { matches.count(where: { !$0.isContinuation }) }
+
+    /// 第一个落在 `line` 行或之后的匹配段的下标。
+    package func firstIndex(onOrAfter line: Int) -> Int {
+        var low = 0
+        var high = matches.count
+        while low < high {
+            let middle = (low + high) / 2
+            if matches[middle].line < line { low = middle + 1 } else { high = middle }
+        }
+        return low
+    }
+
+    /// 当前匹配的全部段（第一段加上紧跟的续段）。
+    package var currentSegments: Range<Int>? {
+        guard let current else { return nil }
+        var end = current + 1
+        while end < matches.count, matches[end].isContinuation { end += 1 }
+        return current..<end
     }
 }
 
@@ -266,33 +313,58 @@ package struct Viewport: Equatable, Sendable {
     }
 }
 
-package struct TUIState: Equatable, Sendable {
-    package var size: TerminalSize
+/// 打开的一个文件（一个标签页）：各自的文档、视口、换行开关与读入代际，切换时原样保留。
+package struct OpenTab: Equatable, Sendable {
+    /// 文件；只在测试里构造不带文件的文档时为 nil
+    package var url: URL?
     package var document: DocumentState
     package var viewport = Viewport()
     package var wrapsLines = true
     /// 打开时带的行号（1 起算），文档读入后应用一次。
     package var targetLine: Int?
-    /// 每次打开 / 重读文档递增；迟到的异步结果代际不符时丢弃。
-    package var generation = 0
+    /// 这个文件最近一次读入的代际；迟到的异步结果代际不符时丢弃。
+    package var generation: Int
+    /// 正在重读：新内容到达后视口按它对回。
+    package var reloadAnchor: ReloadAnchor?
+
+    package init(url: URL?, document: DocumentState, targetLine: Int? = nil, generation: Int) {
+        self.url = url
+        self.document = document
+        self.targetLine = targetLine
+        self.generation = generation
+    }
+}
+
+package struct TUIState: Equatable, Sendable {
+    package var size: TerminalSize
+    /// 打开的文件，按打开顺序；没有打开文件时为空（正文显示 `emptyDocument`）。
+    package var tabs: [OpenTab] = []
+    /// 当前文件在 `tabs` 里的下标；没有打开文件时为 nil。
+    package var activeTabIndex: Int?
+    /// 没有打开文件时正文显示的内容（打开的是目录、文件全关掉了）。
+    package var emptyDocument: DocumentState = .noFile(directory: "")
+    /// 已经发出过的最大代际：每次读文件取一个新的，各个文件的代际互不相同。
+    package var lastGeneration = 0
     /// 状态栏左侧的一次性提示（如「已复制 jq 路径」），下一次按键时清除。
     package var toast: String?
     /// 侧栏；没有文件树时为 nil（只显示正文）。
     package var sidebar: SidebarState?
     package var focus: FocusArea = .content
-    /// 正文显示的文件；打开的是目录且还没选文件时为 nil。
-    package var activeFile: URL?
-    /// 正在重读当前文件：新内容到达后视口按它对回。
-    package var reloadAnchor: ReloadAnchor?
     /// 鼠标选中的文字；换文档、折叠变化、Markdown 重排时清掉。
     package var selection: TextSelection?
     /// 在正文里按下了鼠标、还没松开：拖动扩展选区。
     package var isSelecting = false
-    /// 当前文件所在的版本库根；不在版本库里时为 nil（P 复制相对路径用）。
+    /// 文件树所在的版本库根；不在版本库里时为 nil（P 复制相对路径用）。
     package var repoRoot: URL?
     package var isHelpVisible = false
     /// `:` 之后输入的行号；不在输入时为 nil。
     package var lineInput: String?
+    /// `/` 之后输入的搜索词；不在输入时为 nil。
+    package var searchInput: String?
+    /// 最近一次搜索；Esc 清掉。换文档、重读、Markdown 重排后用同一个词重搜。
+    package var search: SearchState?
+    /// 发起过几次搜索（搜索的代际）。
+    package var searchCount = 0
     /// 每设一次提示加一；过期计时带着它，后来的提示不会被前一个计时清掉。
     package var toastToken = 0
     /// 终端的明暗；收到 OSC 11 背景色或 DSR 996 回复之前按深色。
@@ -301,11 +373,31 @@ package struct TUIState: Equatable, Sendable {
     package var appearanceFromBackground = false
     /// 终端支持 kitty 文字尺寸协议（OSC 66）：Markdown 的 H1 / H2 画成放大文字。启动探测之前为 false。
     package var supportsTextSizing = false
+    /// 最近打开的文件（与 app 共用的记录），启动时与每次记一笔之后由运行时送来。
+    package var recentFiles: [RecentFiles.Item] = []
+    /// 终端名（XTVERSION 回复，如 `kitty(0.49.2)`、`ghostty 1.3.1`）。
+    package var terminalName: String?
+    /// 一格的像素尺寸（`CSI 16 t` 回复）。
+    package var cellPixelSize: PixelSize?
+    /// 终端回答了 kitty 图片协议的探测（`a=q` 回 OK）。
+    package var graphicsReady = false
 
+    /// 能显示图片：终端是 kitty 或 Ghostty（两者都支持图片协议的 Unicode 占位符）、回答了图片协议探测、
+    /// 报了格子像素尺寸。
+    package var supportsImages: Bool {
+        guard graphicsReady, cellPixelSize != nil, let name = terminalName?.lowercased() else { return false }
+        return name.hasPrefix("kitty") || name.hasPrefix("ghostty")
+    }
+
+    /// 打开一个文档（测试用）：`.noFile` 不算打开了文件。
     package init(size: TerminalSize, document: DocumentState, targetLine: Int? = nil) {
         self.size = size
-        self.document = document
-        self.targetLine = targetLine
+        if case .noFile = document {
+            emptyDocument = document
+        } else {
+            tabs = [OpenTab(url: nil, document: document, targetLine: targetLine, generation: 0)]
+            activeTabIndex = 0
+        }
     }
 
     /// 启动时的状态：树根已知；终端够宽或打开的是目录时显示侧栏，打开目录时焦点在侧栏。
@@ -328,9 +420,68 @@ package struct TUIState: Equatable, Sendable {
             isVisible: isDirectory || size.columns >= SidebarState.autoShowColumns
         )
         state.focus = isDirectory ? .sidebar : .content
-        state.activeFile = isDirectory ? nil : target
+        state.emptyDocument = .noFile(directory: isDirectory ? displayPath : treeRoot.lastPathComponent)
+        if !isDirectory { state.tabs[0].url = target }
         state.repoRoot = repoRoot
         return state
+    }
+
+    // MARK: - 当前文件
+
+    package var activeTab: OpenTab? {
+        activeTabIndex.map { tabs[$0] }
+    }
+
+    /// 正文显示的文件；没有打开文件时为 nil。没有标签页时设它会新开一个（测试用）。
+    package var activeFile: URL? {
+        get { activeTab?.url }
+        set {
+            if let index = activeTabIndex {
+                tabs[index].url = newValue
+            } else if let newValue {
+                tabs = [OpenTab(url: newValue, document: emptyDocument, generation: lastGeneration)]
+                activeTabIndex = 0
+            }
+        }
+    }
+
+    package var document: DocumentState {
+        get { activeTab?.document ?? emptyDocument }
+        set {
+            if let index = activeTabIndex { tabs[index].document = newValue } else { emptyDocument = newValue }
+        }
+    }
+
+    package var viewport: Viewport {
+        get { activeTab?.viewport ?? Viewport() }
+        set { if let index = activeTabIndex { tabs[index].viewport = newValue } }
+    }
+
+    package var wrapsLines: Bool {
+        get { activeTab?.wrapsLines ?? true }
+        set { if let index = activeTabIndex { tabs[index].wrapsLines = newValue } }
+    }
+
+    package var targetLine: Int? {
+        get { activeTab?.targetLine }
+        set { if let index = activeTabIndex { tabs[index].targetLine = newValue } }
+    }
+
+    package var reloadAnchor: ReloadAnchor? {
+        get { activeTab?.reloadAnchor }
+        set { if let index = activeTabIndex { tabs[index].reloadAnchor = newValue } }
+    }
+
+    /// 当前文件的读入代际；没有打开文件时是最近发出的代际。
+    package var generation: Int {
+        get { activeTab?.generation ?? lastGeneration }
+        set { if let index = activeTabIndex { tabs[index].generation = newValue } }
+    }
+
+    /// 给当前文件取一个新的读入代际（之前发出的异步结果从此作废）。
+    package mutating func advanceGeneration() {
+        lastGeneration += 1
+        generation = lastGeneration
     }
 
     /// 正文区高度：终端行数减去标题行与状态栏。
@@ -347,10 +498,20 @@ package struct TUIState: Equatable, Sendable {
 
     package var contentColumns: Int { max(size.columns - contentOrigin, 1) }
 
+    /// Open 页签的行：打开的文件，之后是「Recent」小标题与此刻没有打开的最近文件（没有就不显示小标题）。
+    package var openListRows: [OpenListRow] {
+        let openPaths = Set(tabs.compactMap { $0.url?.standardizedFileURL.path })
+        let recents = recentFiles.filter { !openPaths.contains($0.path) }
+        let tabRows = tabs.indices.map(OpenListRow.tab)
+        guard !recents.isEmpty else { return tabRows }
+        return tabRows + [.recentHeader] + recents.map(OpenListRow.recent)
+    }
+
     /// 侧栏实际显示的页签：选了 Contents 但当前文档没有大纲时显示 Files。
     package var sidebarTab: SidebarTab {
-        guard let sidebar, sidebar.preferredTab == .contents, !outline.isEmpty else { return .files }
-        return .contents
+        guard let sidebar else { return .files }
+        if sidebar.preferredTab == .contents, outline.isEmpty { return .files }
+        return sidebar.preferredTab
     }
 
     /// 当前文档的大纲（只有排好版的 Markdown 有）。

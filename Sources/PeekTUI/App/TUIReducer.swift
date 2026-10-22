@@ -20,6 +20,14 @@ package enum TUIEvent: Equatable, Sendable {
     case fileStamp(FileStamp?, generation: Int)
     /// 提示到时间了；令牌不是最新提示的就不清
     case toastExpired(Int)
+    /// 一批搜索结果（按文档顺序）；`isComplete` 时是最后一批
+    case searchResults([SearchMatch], id: Int, generation: Int, isComplete: Bool, isTruncated: Bool)
+    /// 最近打开的文件（与 app 共用的记录，每条能否打开已现查磁盘）
+    case recentFilesLoaded([RecentFiles.Item])
+    /// 当前文件不在文件树下时找到的新树根；`repoRoot` 是它所在的版本库根
+    case treeRootDiscovered(root: URL, repoRoot: URL?, file: URL)
+    /// Markdown 里本地图片的像素尺寸（读不了的是 `PixelSize.unreadable`）
+    case imagesProbed([String: PixelSize], generation: Int)
 }
 
 /// reducer 产出的副作用，由 `TUIRuntime` 执行。
@@ -28,13 +36,13 @@ package enum TUIEffect: Equatable, Sendable {
     /// Ctrl-Z：把终端交还给 shell，`fg` 后回来
     case suspend
     /// 读文件，结果以 `.loaded` / `.loadFailed` 送回；重读时不先显示原文
-    case load(url: URL, generation: Int, width: Int, isReload: Bool, appearance: PeekyPalette.Appearance, scaledHeadings: Bool = false)
+    case load(url: URL, generation: Int, width: Int, isReload: Bool, appearance: PeekyPalette.Appearance, scaledHeadings: Bool = false, images: MarkdownImageContext? = nil)
     /// 用 shiki 高亮全文，结果以 `.highlighted` 分块送回
     case startHighlight(generation: Int, text: String, language: String)
     /// 逐块高亮 Markdown 里的代码块，结果以 `.markdownCodeHighlighted` 送回
     case highlightMarkdownCode(generation: Int, source: String)
     /// 按新宽度 / 新明暗重排 Markdown，结果以 `.markdownLaidOut` 送回
-    case layoutMarkdown(generation: Int, source: String, width: Int, codeTokens: [Int: [[HighlightedToken]]], appearance: PeekyPalette.Appearance, scaledHeadings: Bool = false)
+    case layoutMarkdown(generation: Int, source: String, width: Int, codeTokens: [Int: [[HighlightedToken]]], appearance: PeekyPalette.Appearance, scaledHeadings: Bool = false, images: MarkdownImageContext? = nil)
     /// 用系统默认程序打开链接：带 scheme 的原样打开，相对路径相对文档所在目录
     case open(target: String, baseDirectory: URL?)
     /// 写入系统剪贴板；`description` 用于状态栏提示
@@ -55,6 +63,16 @@ package enum TUIEffect: Equatable, Sendable {
     case expireToast(Int)
     /// 再问一次终端背景色（OSC 11），回复以 `.input(.backgroundColor)` 送回
     case queryBackground
+    /// 在后台搜索，结果以 `.searchResults` 分批送回；发起新搜索时旧的停掉
+    case search(id: Int, generation: Int, query: String, corpus: SearchCorpus)
+    /// 读最近打开的文件，结果以 `.recentFilesLoaded` 送回
+    case loadRecentFiles
+    /// 把文件记进最近打开（与 app 共用），之后以 `.recentFilesLoaded` 送回新列表
+    case recordRecentFile(URL)
+    /// 找文件所在的版本库根作为新树根，结果以 `.treeRootDiscovered` 送回
+    case discoverTreeRoot(URL)
+    /// 读本地图片的像素尺寸，结果以 `.imagesProbed` 送回
+    case probeImages(paths: [String], generation: Int)
 }
 
 /// 纯函数：根据事件更新状态，返回要执行的副作用。
@@ -70,7 +88,10 @@ package enum TUIReducer {
             return launch(&state)
         case let .loaded(document, generation):
             guard generation == state.generation else { return [] }
-            return documentLoaded(document, state: &state)
+            // 文件第一次读进来（不是重读）时记进最近打开，与 app 一致
+            var record: [TUIEffect] = []
+            if case .loading = state.document, let file = state.activeFile { record = [.recordRecentFile(file)] }
+            return documentLoaded(document, state: &state) + record
         case let .loadFailed(message, generation):
             guard generation == state.generation else { return [] }
             state.document = .failed(message: message)
@@ -86,7 +107,7 @@ package enum TUIReducer {
             withLayout(&state) { viewport, layout, height in
                 viewport.moveCursor(to: document.line(forSourceLine: cursorSource), lineCount: layout.lineCount, height: height, rows: layout.rows)
             }
-            return []
+            return rerunSearch(&state) + probeImagesIfNeeded(&state)
         case let .jsonIndexed(view, generation):
             guard generation == state.generation, case var .loaded(document) = state.document else { return [] }
             document.json = view
@@ -96,7 +117,7 @@ package enum TUIReducer {
             guard generation == state.generation, case var .loaded(document) = state.document else { return [] }
             document.markdownCodeTokens = tokens
             state.document = .loaded(document)
-            return [.layoutMarkdown(generation: generation, source: document.store.text, width: state.contentColumns, codeTokens: tokens, appearance: state.appearance, scaledHeadings: state.supportsTextSizing)]
+            return [.layoutMarkdown(generation: generation, source: document.store.text, width: state.contentColumns, codeTokens: tokens, appearance: state.appearance, scaledHeadings: state.supportsTextSizing, images: imageContext(state, document: document))]
         case let .highlighted(chunk, generation):
             guard generation == state.generation, case var .loaded(document) = state.document else { return [] }
             for (offset, line) in chunk.lines.enumerated() {
@@ -125,13 +146,31 @@ package enum TUIReducer {
         case let .toastExpired(token):
             if token == state.toastToken { state.toast = nil }
             return []
+        case let .recentFilesLoaded(items):
+            recentFilesLoaded(items, state: &state)
+            return []
+        case let .treeRootDiscovered(root, repoRoot, file):
+            return treeRootDiscovered(root: root, repoRoot: repoRoot, file: file, state: &state)
+        case let .imagesProbed(sizes, generation):
+            guard generation == state.generation, case var .loaded(document) = state.document else { return [] }
+            document.imageSizes.merge(sizes) { _, new in new }
+            state.document = .loaded(document)
+            return relayoutMarkdownIfNeeded(state)
+        case let .searchResults(matches, id, generation, isComplete, isTruncated):
+            guard generation == state.generation else { return [] }
+            return searchResultsArrived(matches, id: id, isComplete: isComplete, isTruncated: isTruncated, state: &state)
+        case let .input(.paste(text)):
+            pasteIntoSearchInput(text, state: &state)
+            return []
         case let .input(.key(rawPress)):
             let press = normalized(rawPress)
             state.toast = nil
             if state.isHelpVisible { return handleHelpKey(&state) }
             if let input = state.lineInput { return handleLineInput(press, input: input, state: &state) }
+            if let input = state.searchInput { return handleSearchInput(press, input: input, state: &state) }
             if let effects = handleGlobalKey(press, state: &state) { return effects }
             if let effects = handleActionKey(press, state: &state) { return effects }
+            if let effects = handleSearchKey(press, state: &state) { return effects }
             return state.focus == .sidebar ? handleSidebarKey(press, state: &state) : handleKey(press, state: &state)
         case let .input(.mouse(mouse)):
             if case .press = mouse.kind { state.toast = nil }
@@ -143,6 +182,13 @@ package enum TUIReducer {
         case let .input(.backgroundColor(red, green, blue)):
             state.appearanceFromBackground = true
             return setAppearance(appearance(ofBackground: red, green, blue), state: &state)
+        case let .input(.terminalName(name)):
+            return terminalReported(&state) { $0.terminalName = name }
+        case let .input(.cellPixelSize(width, height)):
+            return terminalReported(&state) { $0.cellPixelSize = PixelSize(width: width, height: height) }
+        case let .input(.graphicsReply(id, message)):
+            guard id == graphicsProbeID else { return [] }
+            return terminalReported(&state) { $0.graphicsReady = message == "OK" }
         case let .input(.cursorPosition(_, column)):
             // 只在启动探测时问光标位置：第 1 列打的 2 倍空格让光标到了第 3 列，说明支持放大文字
             state.supportsTextSizing = column == textSizingProbeColumn
@@ -169,12 +215,14 @@ package enum TUIReducer {
         return relayoutMarkdownIfNeeded(state)
     }
 
-    /// Markdown 的排版宽度、明暗或标题放大方式与当前不同时重排。
+    /// Markdown 的排版宽度、明暗、标题放大方式或图片条件与当前不同时重排。
     static func relayoutMarkdownIfNeeded(_ state: TUIState) -> [TUIEffect] {
-        guard case let .loaded(document) = state.document, let rendering = document.markdown,
-              rendering.width != state.contentColumns
+        guard case let .loaded(document) = state.document, let rendering = document.markdown else { return [] }
+        let images = imageContext(state, document: document)
+        guard rendering.width != state.contentColumns
                 || rendering.appearance != state.appearance
                 || rendering.scaledHeadings != state.supportsTextSizing
+                || rendering.imageContext != images
         else { return [] }
         return [.layoutMarkdown(
             generation: state.generation,
@@ -182,16 +230,51 @@ package enum TUIReducer {
             width: state.contentColumns,
             codeTokens: document.markdownCodeTokens,
             appearance: state.appearance,
-            scaledHeadings: state.supportsTextSizing
+            scaledHeadings: state.supportsTextSizing,
+            images: images
         )]
+    }
+
+    // MARK: - 图片
+
+    /// kitty 图片协议探测用的图片编号（`a=q` 不真的存图）。
+    static let graphicsProbeID = 31
+
+    /// 排版时显示图片的条件：终端能显示图片时才有，带上这个文档已读到的图片尺寸；终端不支持放大文字时
+    /// H1 / H2 画成图。
+    static func imageContext(_ state: TUIState, document: OpenedDocument) -> MarkdownImageContext? {
+        guard state.supportsImages, let cell = state.cellPixelSize else { return nil }
+        return MarkdownImageContext(cell: cell, sizes: document.imageSizes, baseDirectory: document.baseDirectory, headingImages: !state.supportsTextSizing)
+    }
+
+    /// 读入时的图片条件（文档还没读进来，图片尺寸沿用 `sizes`）。
+    static func imageContext(_ state: TUIState, file: URL, sizes: [String: PixelSize] = [:]) -> MarkdownImageContext? {
+        guard state.supportsImages, let cell = state.cellPixelSize else { return nil }
+        return MarkdownImageContext(cell: cell, sizes: sizes, baseDirectory: file.deletingLastPathComponent(), headingImages: !state.supportsTextSizing)
+    }
+
+    /// 排版里出现了还没读尺寸的本地图片：请运行时去读。
+    static func probeImagesIfNeeded(_ state: inout TUIState) -> [TUIEffect] {
+        guard state.supportsImages, case var .loaded(document) = state.document, let rendering = document.markdown else { return [] }
+        let missing = rendering.imageSources.filter { document.imageSizes[$0] == nil && !document.requestedImages.contains($0) }
+        guard !missing.isEmpty else { return [] }
+        document.requestedImages.formUnion(missing)
+        state.document = .loaded(document)
+        return [.probeImages(paths: missing, generation: state.generation)]
+    }
+
+    /// 终端名、格子像素尺寸、图片协议探测的回复到了：能显示图片与否变了就重排 Markdown。
+    private static func terminalReported(_ state: inout TUIState, _ update: (inout TUIState) -> Void) -> [TUIEffect] {
+        update(&state)
+        return relayoutMarkdownIfNeeded(state)
     }
 
     // MARK: - 打开与重读
 
     private static func launch(_ state: inout TUIState) -> [TUIEffect] {
-        var effects: [TUIEffect] = []
+        var effects: [TUIEffect] = [.loadRecentFiles]
         if let file = state.activeFile {
-            effects.append(.load(url: file, generation: state.generation, width: state.contentColumns, isReload: false, appearance: state.appearance, scaledHeadings: state.supportsTextSizing))
+            effects.append(.load(url: file, generation: state.generation, width: state.contentColumns, isReload: false, appearance: state.appearance, scaledHeadings: state.supportsTextSizing, images: imageContext(state, file: file)))
         }
         guard var sidebar = state.sidebar else { return effects }
         let directories = state.activeFile.map { sidebar.tree.reveal($0) } ?? [sidebar.tree.root]
@@ -202,22 +285,13 @@ package enum TUIReducer {
         return effects
     }
 
-    /// 在正文里打开另一个文件；已经是当前文件时什么也不做。
-    static func openFile(_ url: URL, state: inout TUIState) -> [TUIEffect] {
-        guard url.standardizedFileURL.path != state.activeFile?.standardizedFileURL.path else { return [] }
-        state.activeFile = url
-        state.generation += 1
-        state.document = .loading(path: url.lastPathComponent)
-        state.reloadAnchor = nil
-        state.targetLine = nil
-        return [.load(url: url, generation: state.generation, width: state.contentColumns, isReload: false, appearance: state.appearance, scaledHeadings: state.supportsTextSizing)]
-    }
-
     /// 重读当前文件：记下视口顶端与光标的源行，新内容到达后对回去。
     /// 读取失败（文件被删）时保留上一次记下的位置，文件再出现时回到那里。
     static func reload(_ state: inout TUIState) -> [TUIEffect] {
         guard let file = state.activeFile else { return [] }
+        var imageSizes: [String: PixelSize] = [:]
         if case let .loaded(document) = state.document {
+            imageSizes = document.imageSizes
             state.reloadAnchor = ReloadAnchor(
                 topSourceLine: document.sourceLine(forLine: state.viewport.top.line),
                 cursorSourceLine: document.sourceLine(forLine: state.viewport.cursor),
@@ -225,8 +299,8 @@ package enum TUIReducer {
                 horizontalOffset: state.viewport.horizontalOffset
             )
         }
-        state.generation += 1
-        return [.load(url: file, generation: state.generation, width: state.contentColumns, isReload: true, appearance: state.appearance, scaledHeadings: state.supportsTextSizing)]
+        state.advanceGeneration()
+        return [.load(url: file, generation: state.generation, width: state.contentColumns, isReload: true, appearance: state.appearance, scaledHeadings: state.supportsTextSizing, images: imageContext(state, file: file, sizes: imageSizes))]
     }
 
     private static func documentLoaded(_ document: OpenedDocument, state: inout TUIState) -> [TUIEffect] {
@@ -249,8 +323,8 @@ package enum TUIReducer {
                 state.targetLine = nil
             }
         }
-        // 读文件期间明暗变了时按新明暗重排
-        let relayout = relayoutMarkdownIfNeeded(state)
+        // 读文件期间明暗变了时按新明暗重排；有搜索词时在新内容里重搜
+        let relayout = relayoutMarkdownIfNeeded(state) + rerunSearch(&state) + probeImagesIfNeeded(&state)
         switch document.presentation {
         case let .source(language):
             return [.startHighlight(generation: state.generation, text: document.store.text, language: language)]
@@ -318,9 +392,17 @@ package enum TUIReducer {
         case (.character("s"), []):
             return toggleSidebar(&state)
         case (.character("1"), []):
-            return showSidebarTab(.files, state: &state)
+            return showSidebarTab(.open, state: &state)
         case (.character("2"), []):
+            return showSidebarTab(.files, state: &state)
+        case (.character("3"), []):
             return showSidebarTab(.contents, state: &state)
+        case (.character("["), []):
+            return cycleTab(by: -1, state: &state)
+        case (.character("]"), []):
+            return cycleTab(by: 1, state: &state)
+        case (.character("x"), []):
+            return closeFileKey(&state)
         case (.character("r"), []):
             return reload(&state)
         case (.character("?"), []):
@@ -329,6 +411,10 @@ package enum TUIReducer {
         case (.character(":"), []):
             guard case .loaded = state.document else { return [] }
             state.lineInput = ""
+            return []
+        case (.character("/"), []):
+            guard case .loaded = state.document else { return [] }
+            state.searchInput = ""
             return []
         default:
             return nil
@@ -356,7 +442,11 @@ package enum TUIReducer {
             }
             return []
         case (.escape, []):
-            state.selection = nil
+            if state.selection != nil {
+                state.selection = nil
+            } else {
+                state.search = nil
+            }
             return []
         case (.enter, []):
             if toggleFold(atDisplayLine: state.viewport.cursor, state: &state) { return [] }

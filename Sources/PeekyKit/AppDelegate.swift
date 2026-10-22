@@ -7,12 +7,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var editMenu: NSMenu?
     private var copyRelativePathMenuItem: NSMenuItem?
     private var openRecentMenu: NSMenu?
-    /// 最近打开的文件，最新在前；跨重启保存在 UserDefaults（见 loadRecentFiles / saveRecentFiles）。
-    /// 在构造时就读出：冷启动时命令行参数、Finder 与 peeky:// 送来的文件早于 didFinishLaunching 到达，
-    /// 那时还没读的话，第一条记录会存进空列表，把上次的列表整个冲掉。
-    private var recentFiles: [RecentFiles.Entry] = AppDelegate.loadRecentFiles()
-
-    private static let recentFilesDefaultsKey = "PeekyRecentFiles"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 启动早期后台预热高亮引擎（eval bundle + init + 空 tokenize）：非阻塞，
@@ -357,7 +351,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         return controller
     }
 
-    // MARK: - 最近打开的文件（File > Open Recent 与空白窗口共用一份列表）
+    // MARK: - 最近打开的文件（File > Open Recent、空白窗口与终端版共用 UserDefaults 里的一份列表，每次用时现读）
 
     private func rebuildOpenRecentMenu(_ menu: NSMenu) {
         RecentFilesMenu.populate(
@@ -369,10 +363,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         )
     }
 
-    /// 此刻的显示条目：每条能否打开在这里现查磁盘。
+    /// 此刻的显示条目：列表现读（终端版可能刚记过），每条能否打开在这里现查磁盘。
     private func recentFileItems() -> [RecentFiles.Item] {
         RecentFiles.items(
-            for: recentFiles,
+            for: RecentFiles.load(),
             pathExists: FileManager.default.fileExists(atPath:),
             homePath: NSHomeDirectory(),
             now: Date()
@@ -391,42 +385,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     private func clearRecentFiles() {
-        recentFiles = []
-        Self.saveRecentFiles(recentFiles)
+        RecentFiles.save([])
         windows.forEach { $0.recentFilesDidChange() }
     }
 
     private func recordRecentFile(_ url: URL) {
-        let entry = RecentFiles.Entry(
-            path: url.standardizedFileURL.path,
-            openedAt: Date(),
-            origin: Self.origin(of: url)
-        )
-        recentFiles = RecentFiles.recording(entry, into: recentFiles)
-        Self.saveRecentFiles(recentFiles)
+        RecentFiles.record(url)
         windows.forEach { $0.recentFilesDidChange() }
-    }
-
-    /// 打开那一刻文件的来源。仓库根下的 `.git` 是文件（worktree / 子模块）才读得出内容；
-    /// 是目录（普通仓库）或用的是 .hg / .svn 时读取失败，按主检出处理。
-    private static func origin(of url: URL) -> RecentFiles.Origin {
-        let root = RepoRoot.discover(from: url)
-        let gitFileContents = root.flatMap {
-            try? String(contentsOf: $0.appendingPathComponent(".git"), encoding: .utf8)
-        }
-        return RecentFiles.origin(rootPath: root?.path, gitFileContents: gitFileContents)
-    }
-
-    private static func loadRecentFiles() -> [RecentFiles.Entry] {
-        guard let data = UserDefaults.standard.data(forKey: recentFilesDefaultsKey),
-              let entries = try? JSONDecoder().decode([RecentFiles.Entry].self, from: data) else {
-            return []
-        }
-        return entries
-    }
-
-    private static func saveRecentFiles(_ entries: [RecentFiles.Entry]) {
-        guard let data = try? JSONEncoder().encode(entries) else { return }
-        UserDefaults.standard.set(data, forKey: recentFilesDefaultsKey)
     }
 }
