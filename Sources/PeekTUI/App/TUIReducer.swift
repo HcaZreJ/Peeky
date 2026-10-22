@@ -240,16 +240,17 @@ package enum TUIReducer {
     /// kitty 图片协议探测用的图片编号（`a=q` 不真的存图）。
     static let graphicsProbeID = 31
 
-    /// 排版时显示图片的条件：终端能显示图片时才有，带上这个文档已读到的图片尺寸。
+    /// 排版时显示图片的条件：终端能显示图片时才有，带上这个文档已读到的图片尺寸；终端不支持放大文字时
+    /// H1 / H2 画成图。
     static func imageContext(_ state: TUIState, document: OpenedDocument) -> MarkdownImageContext? {
         guard state.supportsImages, let cell = state.cellPixelSize else { return nil }
-        return MarkdownImageContext(cell: cell, sizes: document.imageSizes, baseDirectory: document.baseDirectory)
+        return MarkdownImageContext(cell: cell, sizes: document.imageSizes, baseDirectory: document.baseDirectory, headingImages: !state.supportsTextSizing)
     }
 
     /// 读入时的图片条件（文档还没读进来，图片尺寸沿用 `sizes`）。
     static func imageContext(_ state: TUIState, file: URL, sizes: [String: PixelSize] = [:]) -> MarkdownImageContext? {
         guard state.supportsImages, let cell = state.cellPixelSize else { return nil }
-        return MarkdownImageContext(cell: cell, sizes: sizes, baseDirectory: file.deletingLastPathComponent())
+        return MarkdownImageContext(cell: cell, sizes: sizes, baseDirectory: file.deletingLastPathComponent(), headingImages: !state.supportsTextSizing)
     }
 
     /// 排版里出现了还没读尺寸的本地图片：请运行时去读。

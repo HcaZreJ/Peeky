@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import Testing
 @testable import PeekyCore
 @testable import PeekTUI
@@ -8,7 +9,8 @@ import Testing
 // kitty 图片协议的 Unicode 占位符：每格是 U+10EEEE 加行号、列号附加符，前景色是图片编号；图以静默方式
 // 分块传给终端。Markdown 里单独成段的本地图片在读到像素尺寸后排成占位符行（不放大，不超过正文宽与
 // 30 行，保持长宽比），复制得到「[图片] 说明」；没读到尺寸、行内的图按文字显示。终端名是 kitty /
-// Ghostty、报了格子像素尺寸、回答了图片协议探测，三样齐了才显示图片。
+// Ghostty、报了格子像素尺寸、回答了图片协议探测，三样齐了才显示图片。终端不支持放大文字（Ghostty）时
+// 顶层 H1 / H2 画成图：每个折行占两行，复制得到标题文字；支持放大文字（kitty）时仍用放大文字。
 
 private let cell = PixelSize(width: 10, height: 20)
 private let base = URL(fileURLWithPath: "/docs", isDirectory: true)
@@ -99,7 +101,8 @@ struct Visible_terminalImage {
         let relayout = TUIReducer.reduce(&state, .input(.graphicsReply(id: TUIReducer.graphicsProbeID, message: "OK")))
         #expect(state.supportsImages)
         guard case let .layoutMarkdown(_, _, _, _, _, _, images) = relayout.first else { Issue.record("没有重排"); return }
-        #expect(images == MarkdownImageContext(cell: cell, baseDirectory: base))
+        // 这个终端没回答放大文字探测：标题也画成图
+        #expect(images == MarkdownImageContext(cell: cell, baseDirectory: base, headingImages: true))
 
         let probe = TUIReducer.reduce(&state, .markdownLaidOut(MarkdownLayout.render(text, width: 60, theme: .dark, images: images), generation: state.generation))
         #expect(probe.contains(.probeImages(paths: ["/docs/img/a.png"], generation: state.generation)))
@@ -124,5 +127,53 @@ struct Visible_terminalImage {
         #expect(FrameRenderer.render(state).images.count == 1)
         state.viewport.top = ScrollPosition(line: 20, row: 0)
         #expect(FrameRenderer.render(state).images.isEmpty)
+    }
+
+    @Test("不支持放大文字时 H1 / H2 画成图：各占两行，复制得到标题文字，大纲与锚点照旧，H2 下有分隔线")
+    func headingsAsImages() {
+        let context = MarkdownImageContext(cell: cell, baseDirectory: base, headingImages: true)
+        let laidOut = MarkdownLayout.render("# Title\n\n## Sub\n\ntext", width: 44, theme: .dark, images: context)
+        let h1 = laidOut.rows.prefix(2).compactMap(\.image)
+        #expect(h1.count == 2)
+        #expect(h1.first?.content == .heading(text: "Title", red: 0xF0, green: 0xF6, blue: 0xFC, fontScale: 1))
+        #expect(h1.first?.columns == 10 && h1.first?.rows == 2)
+        #expect(laidOut.rows[0].fill?.style.background == MarkdownTheme.dark.headingBar)
+        #expect(laidOut.rows[0].anchor == "title")
+        let h2Row = try! #require(laidOut.rows.firstIndex { $0.image?.content == .heading(text: "Sub", red: 0x44, green: 0x93, blue: 0xF8, fontScale: 0.75) })
+        #expect(rowText(laidOut.rows[h2Row + 2]).contains("───"))
+        #expect(laidOut.outline.map(\.title) == ["Title", "Sub"])
+        let selection = TextSelection(anchor: TextPoint(line: 0, column: 0), head: TextPoint(line: h2Row + 1, column: 40))
+        #expect(SelectionText.markdownText(selection, rows: laidOut.rows) == "Title\n\nSub")
+    }
+
+    @Test("支持放大文字（kitty）时标题仍用放大文字，不画成图")
+    func scaledHeadingsWin() {
+        let context = MarkdownImageContext(cell: cell, baseDirectory: base, headingImages: true)
+        let laidOut = MarkdownLayout.render("# Title", width: 44, theme: .dark, scaledHeadings: true, images: context)
+        #expect(laidOut.rows.allSatisfy { $0.image == nil })
+        #expect(laidOut.rows.first?.scaledHeading != nil)
+    }
+
+    @Test("标题图：PNG 尺寸是格数乘格子像素，字画上了")
+    func headingPNGDrawsText() throws {
+        let image = TerminalImage(content: .heading(text: "Title 标题", red: 0x1F, green: 0x23, blue: 0x28, fontScale: 1), columns: 20, rows: 2, cell: PixelSize(width: 14, height: 25))
+        let png = try #require(ImageRasterizer.png(for: image))
+        let source = try #require(CGImageSourceCreateWithData(png as CFData, nil))
+        let decoded = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        #expect(decoded.width == 280 && decoded.height == 50)
+        let pixels = try #require(decoded.dataProvider?.data as Data?)
+        #expect(pixels.enumerated().contains { $0.offset % 4 == 3 && $0.element > 0 })
+    }
+
+    @Test("能显示图片时：终端不支持放大文字就把标题画成图，支持放大文字就不画")
+    func headingImagesFollowTextSizing() {
+        var state = TUIState(size: TerminalSize(columns: 60, rows: 20), document: .loading(path: "a.md"))
+        state.terminalName = "ghostty 1.3.1"
+        state.cellPixelSize = cell
+        state.graphicsReady = true
+        let document = OpenedDocument(header: DocumentHeader(displayPath: "a.md", details: ""), store: LineStore("# T"), presentation: .markdown, baseDirectory: base)
+        #expect(TUIReducer.imageContext(state, document: document)?.headingImages == true)
+        state.supportsTextSizing = true
+        #expect(TUIReducer.imageContext(state, document: document)?.headingImages == false)
     }
 }

@@ -12,6 +12,8 @@ package struct MarkdownTheme: Equatable, Sendable {
     package var border: TerminalColor
     package var headingAccent: TerminalColor
     package var headingBar: TerminalColor
+    /// 一级标题画成图时的文字色（github-markdown.css 的 `--fgColor-default`）；终端里的字用终端默认前景色
+    package var headingText: TerminalColor
     package var quoteBar: TerminalColor
     package var codeBlockBackground: TerminalColor
     package var inlineCodeBackground: TerminalColor
@@ -24,6 +26,7 @@ package struct MarkdownTheme: Equatable, Sendable {
         border: .rgb(0x3D, 0x44, 0x4D),
         headingAccent: .rgb(0x44, 0x93, 0xF8),
         headingBar: .rgb(0x1C, 0x2B, 0x41),
+        headingText: .rgb(0xF0, 0xF6, 0xFC),
         quoteBar: .rgb(0x3D, 0x44, 0x4D),
         codeBlockBackground: .rgb(0x15, 0x1B, 0x23),
         inlineCodeBackground: .rgb(0x2D, 0x33, 0x3B)
@@ -37,6 +40,7 @@ package struct MarkdownTheme: Equatable, Sendable {
         border: .rgb(0xD1, 0xD9, 0xE0),
         headingAccent: .rgb(0x09, 0x69, 0xDA),
         headingBar: .rgb(0xDD, 0xF4, 0xFF),
+        headingText: .rgb(0x1F, 0x23, 0x28),
         quoteBar: .rgb(0xD1, 0xD9, 0xE0),
         codeBlockBackground: .rgb(0xF6, 0xF8, 0xFA),
         inlineCodeBackground: .rgb(0xEF, 0xF1, 0xF3)
@@ -79,11 +83,14 @@ package struct MarkdownImageContext: Equatable, Sendable {
     package var sizes: [String: PixelSize]
     /// 文档所在目录：图片的相对路径据此解析
     package var baseDirectory: URL?
+    /// 顶层 H1 / H2 画成图（终端不支持放大文字时）
+    package var headingImages: Bool
 
-    package init(cell: PixelSize, sizes: [String: PixelSize] = [:], baseDirectory: URL?) {
+    package init(cell: PixelSize, sizes: [String: PixelSize] = [:], baseDirectory: URL?, headingImages: Bool = false) {
         self.cell = cell
         self.sizes = sizes
         self.baseDirectory = baseDirectory
+        self.headingImages = headingImages
     }
 }
 
@@ -411,7 +418,14 @@ package enum MarkdownLayout {
             let anchor = slug(for: heading)
             var style = CellStyle(bold: true)
             let scales = scaledHeadings && containerDepth == 0
+            let drawsImage = !scales && containerDepth == 0 && images?.headingImages == true
             switch heading.level {
+            case 1 where drawsImage:
+                return imageHeadingLines(heading, spec: .h1, color: theme.headingText, width: width, leading: 1, line: line, anchor: anchor)
+            case 2 where drawsImage:
+                var rows = imageHeadingLines(heading, spec: .h2, color: theme.headingAccent, width: width, leading: 0, line: line, anchor: anchor)
+                rows.append(Line(spans: [.decoration(String(repeating: "─", count: width), style: CellStyle(foreground: theme.border))], sourceLine: line))
+                return rows
             case 1 where scales:
                 return scaledLines(heading, spec: .h1, style: style, width: width, leading: 1, line: line, anchor: anchor)
             case 2 where scales:
@@ -470,6 +484,44 @@ package enum MarkdownLayout {
                     ),
                     Line(spans: [], sourceLine: line, fill: fill, joinsPrevious: "", scaledHeading: bottom),
                 ]
+            }
+        }
+
+        /// 画成图的标题（终端能显示图片、不支持放大文字时）：与放大标题同样按一半宽度折行，每个折行是一张
+        /// 宽为文字两倍、高两行的图，上下两行都是它的占位符；复制时上一行给出标题文字，下一行是装饰。
+        /// H1 左侧留 1 列并铺整行标题底色。
+        mutating func imageHeadingLines(_ heading: Heading, spec: ScaleSpec, color: TerminalColor, width: Int, leading: Int, line: Int, anchor: String) -> [Line] {
+            guard let images else { return [] }
+            var rgb: (UInt8, UInt8, UInt8) = (0xF0, 0xF6, 0xFC)
+            if case let .rgb(red, green, blue) = color { rgb = (red, green, blue) }
+            let wrapped = wrapInline(Array(heading.children), style: CellStyle(bold: true), width: max((width - leading) / spec.scale, 4), sourceLine: line)
+            let fill = leading > 0 ? LineFill(column: 0, style: CellStyle(background: theme.headingBar), toEdge: true) : nil
+            let leadingSpans: [StyledSpan] = leading > 0 ? [.decoration(String(repeating: " ", count: leading), style: .plain)] : []
+            let fontScale = Double(spec.numerator) / Double(spec.denominator)
+            return wrapped.enumerated().flatMap { index, row -> [Line] in
+                let text = row.spans.map(\.text).joined()
+                let image = TerminalImage(
+                    content: .heading(text: text, red: rgb.0, green: rgb.1, blue: rgb.2, fontScale: fontScale),
+                    columns: TextWidth.width(of: text) * spec.scale,
+                    rows: spec.scale,
+                    cell: images.cell
+                )
+                let style = CellStyle(foreground: ImagePlaceholder.color(for: image.id))
+                return (0..<image.rows).map { part in
+                    Line(
+                        spans: leadingSpans + [StyledSpan(
+                            text: ImagePlaceholder.rowText(row: part, columns: image.columns),
+                            style: style,
+                            copyText: part == 0 ? text : ""
+                        )],
+                        sourceLine: line,
+                        fill: fill,
+                        anchor: index == 0 && part == 0 ? anchor : nil,
+                        links: part == 0 ? row.links : [],
+                        joinsPrevious: part == 0 ? row.joinsPrevious : "",
+                        image: image
+                    )
+                }
             }
         }
 
