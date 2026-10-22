@@ -62,6 +62,17 @@ package struct FileTree: Equatable, Sendable {
 
     package var rootPath: String { root.path }
 
+    /// 文件在树根下（树里能定位到它）。
+    package func contains(_ file: URL) -> Bool {
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        return file.standardizedFileURL.path.hasPrefix(rootPrefix)
+    }
+
+    /// 这个目录已经列过。
+    package func isListed(_ directory: URL) -> Bool {
+        listings[directory.standardizedFileURL.path] != nil
+    }
+
     /// 展开且已列过的目录（含树根），供 `FileTreeRefresh.scope` 收窄刷新范围。
     package var loadedDirectories: [URL] {
         ([rootPath] + expanded.sorted())

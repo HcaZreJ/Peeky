@@ -28,8 +28,10 @@ package enum Keymap {
         KeymapEntry(keys: "L", action: "复制「路径:行号」（选中的首行或当前行）"),
         KeymapEntry(keys: "o / e", action: "在 Finder 中显示 / 用默认编辑器打开"),
         KeymapEntry(keys: "r", action: "从磁盘重读"),
+        KeymapEntry(keys: "[ / ]", action: "上一个 / 下一个打开的文件"),
+        KeymapEntry(keys: "x", action: "关掉当前文件（侧栏 Open 里关掉选中的）"),
         KeymapEntry(keys: "Tab / s", action: "切换焦点 / 显示或收起侧栏"),
-        KeymapEntry(keys: "1 / 2", action: "侧栏切到 Files / Contents"),
+        KeymapEntry(keys: "1 / 2 / 3", action: "侧栏切到 Open / Files / Contents"),
         KeymapEntry(keys: "Esc", action: "取消选中、清除搜索高亮；侧栏里回到正文"),
         KeymapEntry(keys: "q", action: "退出"),
     ]

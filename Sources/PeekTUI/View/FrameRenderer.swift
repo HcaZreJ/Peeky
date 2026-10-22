@@ -9,6 +9,7 @@ package enum FrameRenderer {
     static let helpHint = "? 帮助  q 退出"
 
     static let noFileHint = "从左侧选择一个文件"
+    static let recentFilesHint = "按 1 在 Open 里打开最近的文件"
 
     package static func render(_ state: TUIState) -> CellBuffer {
         var frame = CellBuffer(columns: state.size.columns, rows: state.size.rows)
@@ -28,6 +29,9 @@ package enum FrameRenderer {
         case let .noFile(directory):
             drawTitle(&frame, path: directory, details: "")
             body.write(noFileHint, row: 1, column: 1, style: CellStyle(dim: true))
+            if !state.recentFiles.isEmpty, state.sidebar != nil {
+                body.write(recentFilesHint, row: 2, column: 1, style: CellStyle(dim: true))
+            }
         case let .loaded(document):
             drawTitle(&frame, path: document.header.displayPath, details: document.header.details)
             let layout = DocumentLayout(document: document, columns: state.contentColumns, wrapsLines: state.wrapsLines, appearance: appearance)
@@ -45,7 +49,8 @@ package enum FrameRenderer {
             let jqPath = document.json?.paths(forSourceLine: cursorSource).map { JSONPathMap.truncatedForDisplay($0.jq, limit: 60) + "  " } ?? ""
             let selected = state.selection.flatMap { $0.isEmpty ? nil : "选中 \(SelectionText.text($0, layout: layout).count) 字符  " } ?? ""
             let searchSummary = state.search.map { searchSummaryText($0) + "  " } ?? ""
-            statusRight = "\(selected)\(searchSummary)\(jqPath)\(wrapHint)\(position)  \(helpHint)"
+            let fileIndex = state.tabs.count > 1 ? "文件 \((state.activeTabIndex ?? 0) + 1)/\(state.tabs.count)  " : ""
+            statusRight = "\(selected)\(searchSummary)\(jqPath)\(wrapHint)\(fileIndex)\(position)  \(helpHint)"
             let leftWidth = state.size.columns - TextWidth.width(of: statusRight) - 3
             statusLeft = state.toast ?? document.progressNote ?? selectionReferenceHint(state, width: leftWidth) ?? ""
         }

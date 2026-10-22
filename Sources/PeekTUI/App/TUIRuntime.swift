@@ -123,6 +123,22 @@ package final class TUIRuntime {
             terminal.write(Self.backgroundQuery)
         case let .search(id, generation, query, corpus):
             search(id: id, generation: generation, query: query, corpus: corpus)
+        case .loadRecentFiles:
+            Task.detached(priority: .utility) { [weak self] in
+                let items = Self.recentFileItems(RecentFiles.load())
+                await self?.dispatch(.recentFilesLoaded(items))
+            }
+        case let .recordRecentFile(url):
+            Task.detached(priority: .utility) { [weak self] in
+                let items = Self.recentFileItems(RecentFiles.record(url))
+                await self?.dispatch(.recentFilesLoaded(items))
+            }
+        case let .discoverTreeRoot(url):
+            Task.detached(priority: .userInitiated) { [weak self] in
+                let repoRoot = RepoRoot.discover(from: url)
+                let root = repoRoot ?? url.deletingLastPathComponent()
+                await self?.dispatch(.treeRootDiscovered(root: root, repoRoot: repoRoot, file: url))
+            }
         case let .expireToast(token):
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.toastDuration) { [weak self] in
                 MainActor.assumeIsolated {
@@ -130,6 +146,12 @@ package final class TUIRuntime {
                 }
             }
         }
+    }
+
+    /// 最近打开的显示条目：每条能否打开在这里现查磁盘。终端版打包在 app 里时 `UserDefaults.standard`
+    /// 就是 app 的偏好域，与 app 共用一份记录。
+    nonisolated private static func recentFileItems(_ entries: [RecentFiles.Entry]) -> [RecentFiles.Item] {
+        RecentFiles.items(for: entries, pathExists: FileManager.default.fileExists(atPath:), homePath: NSHomeDirectory(), now: Date())
     }
 
     /// 写剪贴板：本机用 `pbcopy`；在 SSH 会话里或 pbcopy 失败时改用终端的 OSC 52。

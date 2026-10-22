@@ -1,8 +1,30 @@
 import Foundation
+import PeekyCore
 
 package enum SidebarTab: Equatable, Sendable {
+    /// 打开的文件与最近打开的文件
+    case open
     case files
     case contents
+}
+
+/// Open 页签里的一行。
+package enum OpenListRow: Equatable, Sendable {
+    /// 打开的文件（`TUIState.tabs` 的下标）
+    case tab(Int)
+    /// 「Recent」小标题
+    case recentHeader
+    /// 最近打开、此刻没有打开的文件
+    case recent(RecentFiles.Item)
+
+    /// 能选中（小标题与打不开的最近文件不能）。
+    var isSelectable: Bool {
+        switch self {
+        case .tab: true
+        case .recentHeader: false
+        case let .recent(item): item.isOpenable
+        }
+    }
 }
 
 /// 键盘输入交给哪一块：正文或侧栏。
@@ -11,7 +33,7 @@ package enum FocusArea: Equatable, Sendable {
     case sidebar
 }
 
-/// 侧栏状态：显示与否、页签、文件树、两个列表各自的选中项与滚动位置。
+/// 侧栏状态：显示与否、页签、文件树、三个列表各自的选中项与滚动位置。
 package struct SidebarState: Equatable, Sendable {
     /// 终端至少这么宽时侧栏默认显示。
     package static let autoShowColumns = 80
@@ -27,6 +49,9 @@ package struct SidebarState: Equatable, Sendable {
     package var treeTop = 0
     package var outlineSelection = 0
     package var outlineTop = 0
+    /// Open 页签里选中的行（`TUIState.openListRows` 的下标）。
+    package var openSelection = 0
+    package var openTop = 0
 
     package init(tree: FileTree, isVisible: Bool) {
         self.tree = tree

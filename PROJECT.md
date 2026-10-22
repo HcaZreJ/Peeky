@@ -22,10 +22,10 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 | 顶栏文件名下方的副标题以文件最后更改时间开头：`最后更改于：2026 年 10 月 20 日 14:32:05  \|  Markdown  \|  11 KB  \|  UTF-8`（本地时区、24 小时制、精确到秒，取自读文件时的磁盘修改时间；文件被外部改写、重读之后随之刷新），用来对上文件是哪次会话里生成或改写的。副标题放不下时从尾部省略，时间一段最后才被截，不撑宽窗口 | ✅ |
 | XML / plist 缩进格式化 + 正则语法高亮 | ✅ |
 | 拖放打开 / Finder 打开方式 / 三档大小上限（文件读取 80 MB、富格式化 8 MB、语法高亮 1.5M UTF-16 字符） | ✅ |
-| 最近打开的文件：File ▸ Open Recent 子菜单 + 空白窗口（没打开文件时）里的 Recent Files 列表，最多 20 条、最新在前、跨重启保留（UserDefaults `PeekyRecentFiles`），Clear Menu / Clear 清空。每条写文件名 + 位置（仓库名、`仓库 › worktree 名`、或仓库外的 `~` 缩写父目录；同一仓库内同名才补目录）。打不开的条目保留、置灰、不可点，行尾写原因：所在 git worktree 整个不在了写 `Worktree deleted`，其余写 `File moved or deleted`；悬停提示给完整路径与一句说明 | ✅ |
+| 最近打开的文件：File ▸ Open Recent 子菜单 + 空白窗口（没打开文件时）里的 Recent Files 列表，最多 20 条、最新在前、跨重启保留（UserDefaults `PeekyRecentFiles`，终端版共用这份记录），Clear Menu / Clear 清空。每条写文件名 + 位置（仓库名、`仓库 › worktree 名`、或仓库外的 `~` 缩写父目录；同一仓库内同名才补目录）。打不开的条目保留、置灰、不可点，行尾写原因：所在 git worktree 整个不在了写 `Worktree deleted`，其余写 `File moved or deleted`；悬停提示给完整路径与一句说明 | ✅ |
 | 终端版 `peek-tui`：在当前终端里全屏打开文件或目录，`q` 退出；`peek` 在终端里运行时 exec 它，`--app` 或标准输出不是终端时走 app；随 app 打包在 `Contents/MacOS/`；输出到管道时输出排好版的纯文字 | ✅（Ghostty 分栏实测待用户） |
 | 终端版显示：纯文本、源码（shiki 高亮，固定 Dark Modern 底）、XML / plist、Markdown（按终端宽度排版：表格、列表、引用、代码块、链接 OSC 8；kitty 下 H1 / H2 用 OSC 66 真文字放大）、JSON / JSONL（折叠、jq 路径常驻状态栏、坏行标红）；超过 1 MB 需格式化的文件先显示原文再替换 | ✅ |
-| 终端版侧栏：Files（版本库根的文件树，磁盘变化 1 秒内同步）与 Contents（Markdown 1–4 级标题大纲）；当前文件被改写后自动重读、视口按源行留在原处 | ✅ |
+| 终端版侧栏：Open（打开的文件 + 与 app 共用的最近打开）、Files（版本库根的文件树，磁盘变化 1 秒内同步；切到仓库外的文件时换树根）与 Contents（Markdown 1–4 级标题大纲）；一次可开多个文件，`[` / `]` 切换、`x` 关掉，各自保留视口与折叠；当前文件被改写后自动重读、视口按源行留在原处 | ✅ |
 | 终端版交互：鼠标拖选 / 双击选词 / 三击选行，`y` / ⌘C 复制（装饰不复制，JSON 折叠态复制完整内容）；复制文件名 / 绝对路径 / 相对路径 / 全文 / 「路径:行号」（选中时状态栏显示）；`:行号` 跳行；`/` 全文搜索（`n` / `N` 前后跳，大文件在后台分批搜）；`?` 帮助浮层；配色跟随终端明暗（以 OSC 11 背景色为准） | ✅ |
 | 端到端冷启计时验收（plan W5） | ⏳ 后续 |
 | 全局主题统一（`PeekyTheme` 覆盖侧栏 / 源码高亮 / Markdown） | ⏳ 后续 |
@@ -35,7 +35,7 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 - `RecentFiles.Entry { path, openedAt, origin }`：一条最近文件，`origin` ∈ `.folder` / `.repository(name, rootPath)` / `.worktree(repositoryName, worktreeName, rootPath)`，在文件成功读进 tab 的那一刻由 `RepoRoot.discover` + 根下 `.git` 文件内容（`gitdir: …/worktrees/<名>`）判定并记下——worktree 删掉后 `.git` 跟着没了，显示时只能靠这份记录说明原因。可用性（`available` / `worktreeRemoved` / `missing`）每次显示时现查磁盘；`RecentFiles.Item` 是菜单条目与空白窗口行共用的显示文字
 - `LoadedText { text, encoding, isTruncated, kind }`：`TextFileLoader` 的读取产物
 - `FileKind`：markdown / json / jsonl / yaml / xml / plist / csv / log / text
-- `TUIState`（PeekTUI）：终端版的全部界面状态——当前文档（`OpenedDocument`：按行存的文本、显示方式、高亮、Markdown 排版结果、JSON 折叠视图、文件戳）、视口、侧栏（`SidebarState` + 值类型文件树 `FileTree`）、焦点、选区（`TextSelection`，显示行 + 视觉列）、明暗与终端能力；只经 `TUIReducer.reduce` 修改
+- `TUIState`（PeekTUI）：终端版的全部界面状态——打开的文件（`OpenTab` 列表与当前下标；每个文件有自己的文档 `OpenedDocument`（按行存的文本、显示方式、高亮、Markdown 排版结果、JSON 折叠视图、文件戳）、视口、换行开关、读入代际）、最近打开、搜索、侧栏（`SidebarState` + 值类型文件树 `FileTree`）、焦点、选区（`TextSelection`，显示行 + 视觉列）、明暗与终端能力；只经 `TUIReducer.reduce` 修改
 - `PreviewTab { url, document, mode, targetLine, targetColumn, stamp }`：窗口内 tab 状态。`stamp` 是读到 `document` 时磁盘上的 `FileStamp { size, mtime }`，磁盘事件到达时先比它，相等就不重读整个文件
 - `FileTreeNode { url, name, isDirectory, isErrorPlaceholder, childrenLoaded, children }`：文件树节点。`reconcile(existing:entries:)` 把磁盘最新一级列表对账进已缓存的子项——次序跟随 `entries`，URL 未变的条目复用原节点实例（`NSOutlineView` 按实例记展开态，换实例会把展开的子树折回去），新 URL 建新节点，磁盘上消失的丢弃
 - `FileTreeRefresh.Scope { directoriesToReload, touchesActiveFile }`：一次磁盘变化要触发的刷新范围。`scope(changedPaths:mustScanSubDirectories:loadedDirectories:activeFileURL:)` 是纯路径运算，路径比较前统一解析 symlink、剥前导 `/private`、去尾斜杠
@@ -84,7 +84,7 @@ TUIReducer → DocumentLayout / JSONView / FileTree / SelectionText
 FrameRenderer → DocumentLayout / SidebarRenderer / HelpOverlay
 ```
 - `TUIRuntime`：唯一有状态的对象，执行副作用（读文件、列目录、监听磁盘、写剪贴板、后台分批搜索），调度渲染。
-- `TUIReducer`：纯函数，事件 → 新状态 + 副作用；侧栏、复制类动作、搜索的分支在 `SidebarReducer.swift` / `ActionReducer.swift` / `SearchReducer.swift` 三个扩展文件里。
+- `TUIReducer`：纯函数，事件 → 新状态 + 副作用；侧栏、多文件、复制类动作、搜索的分支在 `SidebarReducer.swift` / `TabsReducer.swift` / `ActionReducer.swift` / `SearchReducer.swift` 四个扩展文件里。
 - `FrameRenderer`：纯函数，状态 → 一帧 `CellBuffer`；`ScreenEncoder`：前后两帧的差异 → 转义序列。
 - `SearchEngine`：纯函数，在按行文本或 Markdown 排版行里找搜索词，结果是「行 + 视觉列区间」。
 - `PlainOutput`：标准输出不是终端时输出的纯文字。

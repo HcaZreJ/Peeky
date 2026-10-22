@@ -5,7 +5,7 @@ import Testing
 
 // MARK: - 侧栏可见样例
 //
-// 侧栏两个页签：Files（文件树）与 Contents（Markdown 1–4 级标题大纲）。树根是版本库根
+// 侧栏三个页签：Open（打开的文件，见 tabsVisible）、Files（文件树）与 Contents（Markdown 1–4 级标题大纲）。树根是版本库根
 // （没有就是文件所在目录）；启动时展开当前文件的各级父目录并选中它。目录在前、文件在后，
 // 每层缩进 2 列，祖先的导轨画在祖先自己的三角那一列，选中项所在分支那一列加亮；读不了的
 // 目录展开后显示「(无法读取)」。侧栏里回车：目录展开 / 收起，文件在正文里打开并把焦点交回正文。
@@ -79,7 +79,7 @@ struct Visible_sidebar {
 
         state = launchedState()
         let frame = FrameRenderer.render(state)
-        #expect(frame.rowText(1).hasPrefix(" Files  Contents"))
+        #expect(frame.rowText(1).hasPrefix(" Open  Files  Contents"))
         #expect(frame.rowText(2).hasPrefix(" ▾ src"))
         #expect(frame.rowText(3).hasPrefix(" │ ▾ app"))
         #expect(frame.rowText(4).hasPrefix(" │ │   main.swift"))
@@ -135,7 +135,7 @@ struct Visible_sidebar {
         let paragraphs = Array(repeating: "para", count: 30).joined(separator: "\n\n")
         let text = "# A\n\n## B\n\n" + paragraphs + "\n\n### C\n\n" + paragraphs + "\n\n##### E"
         _ = TUIReducer.reduce(&state, .loaded(markdownDocument(text, width: state.contentColumns), generation: state.generation))
-        _ = press(&state, .character("2"))
+        _ = press(&state, .character("3"))
         #expect(state.focus == .sidebar)
         let frame = FrameRenderer.render(state)
         #expect(frame.rowText(2).hasPrefix(" A "))
@@ -159,7 +159,7 @@ struct Visible_sidebar {
     func contentsFallsBackForPlainFiles() {
         var state = launchedState()
         _ = TUIReducer.reduce(&state, .loaded(markdownDocument("# A", width: state.contentColumns), generation: state.generation))
-        _ = press(&state, .character("2"))
+        _ = press(&state, .character("3"))
         #expect(state.sidebarTab == .contents)
         _ = TUIReducer.reduce(&state, .loaded(OpenedDocument(
             header: DocumentHeader(displayPath: "main.swift", details: ""),

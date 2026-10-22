@@ -22,6 +22,10 @@ package enum TUIEvent: Equatable, Sendable {
     case toastExpired(Int)
     /// 一批搜索结果（按文档顺序）；`isComplete` 时是最后一批
     case searchResults([SearchMatch], id: Int, generation: Int, isComplete: Bool, isTruncated: Bool)
+    /// 最近打开的文件（与 app 共用的记录，每条能否打开已现查磁盘）
+    case recentFilesLoaded([RecentFiles.Item])
+    /// 当前文件不在文件树下时找到的新树根；`repoRoot` 是它所在的版本库根
+    case treeRootDiscovered(root: URL, repoRoot: URL?, file: URL)
 }
 
 /// reducer 产出的副作用，由 `TUIRuntime` 执行。
@@ -59,6 +63,12 @@ package enum TUIEffect: Equatable, Sendable {
     case queryBackground
     /// 在后台搜索，结果以 `.searchResults` 分批送回；发起新搜索时旧的停掉
     case search(id: Int, generation: Int, query: String, corpus: SearchCorpus)
+    /// 读最近打开的文件，结果以 `.recentFilesLoaded` 送回
+    case loadRecentFiles
+    /// 把文件记进最近打开（与 app 共用），之后以 `.recentFilesLoaded` 送回新列表
+    case recordRecentFile(URL)
+    /// 找文件所在的版本库根作为新树根，结果以 `.treeRootDiscovered` 送回
+    case discoverTreeRoot(URL)
 }
 
 /// 纯函数：根据事件更新状态，返回要执行的副作用。
@@ -74,7 +84,10 @@ package enum TUIReducer {
             return launch(&state)
         case let .loaded(document, generation):
             guard generation == state.generation else { return [] }
-            return documentLoaded(document, state: &state)
+            // 文件第一次读进来（不是重读）时记进最近打开，与 app 一致
+            var record: [TUIEffect] = []
+            if case .loading = state.document, let file = state.activeFile { record = [.recordRecentFile(file)] }
+            return documentLoaded(document, state: &state) + record
         case let .loadFailed(message, generation):
             guard generation == state.generation else { return [] }
             state.document = .failed(message: message)
@@ -129,6 +142,11 @@ package enum TUIReducer {
         case let .toastExpired(token):
             if token == state.toastToken { state.toast = nil }
             return []
+        case let .recentFilesLoaded(items):
+            recentFilesLoaded(items, state: &state)
+            return []
+        case let .treeRootDiscovered(root, repoRoot, file):
+            return treeRootDiscovered(root: root, repoRoot: repoRoot, file: file, state: &state)
         case let .searchResults(matches, id, generation, isComplete, isTruncated):
             guard generation == state.generation else { return [] }
             return searchResultsArrived(matches, id: id, isComplete: isComplete, isTruncated: isTruncated, state: &state)
@@ -201,7 +219,7 @@ package enum TUIReducer {
     // MARK: - 打开与重读
 
     private static func launch(_ state: inout TUIState) -> [TUIEffect] {
-        var effects: [TUIEffect] = []
+        var effects: [TUIEffect] = [.loadRecentFiles]
         if let file = state.activeFile {
             effects.append(.load(url: file, generation: state.generation, width: state.contentColumns, isReload: false, appearance: state.appearance, scaledHeadings: state.supportsTextSizing))
         }
@@ -212,17 +230,6 @@ package enum TUIReducer {
         effects += directories.map { .listDirectory($0) }
         effects.append(.watch(root: sidebar.tree.root))
         return effects
-    }
-
-    /// 在正文里打开另一个文件；已经是当前文件时什么也不做。
-    static func openFile(_ url: URL, state: inout TUIState) -> [TUIEffect] {
-        guard url.standardizedFileURL.path != state.activeFile?.standardizedFileURL.path else { return [] }
-        state.activeFile = url
-        state.generation += 1
-        state.document = .loading(path: url.lastPathComponent)
-        state.reloadAnchor = nil
-        state.targetLine = nil
-        return [.load(url: url, generation: state.generation, width: state.contentColumns, isReload: false, appearance: state.appearance, scaledHeadings: state.supportsTextSizing)]
     }
 
     /// 重读当前文件：记下视口顶端与光标的源行，新内容到达后对回去。
@@ -237,7 +244,7 @@ package enum TUIReducer {
                 horizontalOffset: state.viewport.horizontalOffset
             )
         }
-        state.generation += 1
+        state.advanceGeneration()
         return [.load(url: file, generation: state.generation, width: state.contentColumns, isReload: true, appearance: state.appearance, scaledHeadings: state.supportsTextSizing)]
     }
 
@@ -330,9 +337,17 @@ package enum TUIReducer {
         case (.character("s"), []):
             return toggleSidebar(&state)
         case (.character("1"), []):
-            return showSidebarTab(.files, state: &state)
+            return showSidebarTab(.open, state: &state)
         case (.character("2"), []):
+            return showSidebarTab(.files, state: &state)
+        case (.character("3"), []):
             return showSidebarTab(.contents, state: &state)
+        case (.character("["), []):
+            return cycleTab(by: -1, state: &state)
+        case (.character("]"), []):
+            return cycleTab(by: 1, state: &state)
+        case (.character("x"), []):
+            return closeFileKey(&state)
         case (.character("r"), []):
             return reload(&state)
         case (.character("?"), []):
