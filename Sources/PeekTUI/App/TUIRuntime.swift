@@ -16,6 +16,8 @@ package final class TUIRuntime {
     private var escapeFlushGeneration = 0
     private var sources: [DispatchSourceProtocol] = []
     private var watcher: DirectoryWatcher?
+    /// 正在进行的搜索；发起新搜索时取消它。
+    private var searchTask: Task<Void, Never>?
     /// 上一次按下鼠标的时间、位置与连击次数，用来认双击 / 三击。
     private var lastPress: (time: ContinuousClock.Instant, row: Int, column: Int, count: Int)?
 
@@ -119,6 +121,8 @@ package final class TUIRuntime {
             Self.runOpen(["-t", url.path])
         case .queryBackground:
             terminal.write(Self.backgroundQuery)
+        case let .search(id, generation, query, corpus):
+            search(id: id, generation: generation, query: query, corpus: corpus)
         case let .expireToast(token):
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.toastDuration) { [weak self] in
                 MainActor.assumeIsolated {
@@ -195,6 +199,30 @@ package final class TUIRuntime {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try? process.run()
+    }
+
+    /// 在后台按块搜索（`SearchEngine.chunks`），每块有结果就回主线程派发一批，最后一批标 `isComplete`；
+    /// 匹配数到上限时提前结束。发起新搜索时取消旧的。
+    private func search(id: Int, generation: Int, query: String, corpus: SearchCorpus) {
+        searchTask?.cancel()
+        searchTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let chunks = SearchEngine.chunks(of: corpus)
+            var found = 0
+            for (index, chunk) in chunks.enumerated() {
+                guard !Task.isCancelled else { return }
+                let matches = SearchEngine.matches(in: corpus, query: query, lines: chunk, limit: SearchEngine.maximumMatches - found)
+                found += matches.count
+                let isTruncated = found >= SearchEngine.maximumMatches
+                let isComplete = isTruncated || index == chunks.count - 1
+                if !matches.isEmpty || isComplete {
+                    await self?.dispatch(.searchResults(matches, id: id, generation: generation, isComplete: isComplete, isTruncated: isTruncated))
+                }
+                if isTruncated { return }
+            }
+            if chunks.isEmpty {
+                await self?.dispatch(.searchResults([], id: id, generation: generation, isComplete: true, isTruncated: false))
+            }
+        }
     }
 
     /// 高亮在后台任务里流式进行，每块结果回主线程派发；代际不符的块由 reducer 丢弃。

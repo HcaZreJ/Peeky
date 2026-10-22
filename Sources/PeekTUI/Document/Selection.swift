@@ -66,6 +66,15 @@ package enum VisualColumns {
         cells(of: text).last.map { $0.column + $0.width } ?? 0
     }
 
+    /// 从第 `column` 列起排下 `text` 之后到达的列（制表符按制表位展开）。
+    package static func column(after text: String, from column: Int) -> Int {
+        var column = column
+        for character in text {
+            column += character == "\t" ? LineLayout.tabWidth - column % LineLayout.tabWidth : TextWidth.width(of: character)
+        }
+        return column
+    }
+
     /// `column` 处的词的视觉列区间：字母数字与下划线连成一个词，空白连成一段，其余字符各自成段；
     /// 越过行尾时为空区间。
     package static func word(in text: String, at column: Int) -> Range<Int> {

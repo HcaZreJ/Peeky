@@ -26,7 +26,7 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 | 终端版 `peek-tui`：在当前终端里全屏打开文件或目录，`q` 退出；`peek` 在终端里运行时 exec 它，`--app` 或标准输出不是终端时走 app；随 app 打包在 `Contents/MacOS/`；输出到管道时输出排好版的纯文字 | ✅（Ghostty 分栏实测待用户） |
 | 终端版显示：纯文本、源码（shiki 高亮，固定 Dark Modern 底）、XML / plist、Markdown（按终端宽度排版：表格、列表、引用、代码块、链接 OSC 8；kitty 下 H1 / H2 用 OSC 66 真文字放大）、JSON / JSONL（折叠、jq 路径常驻状态栏、坏行标红）；超过 1 MB 需格式化的文件先显示原文再替换 | ✅ |
 | 终端版侧栏：Files（版本库根的文件树，磁盘变化 1 秒内同步）与 Contents（Markdown 1–4 级标题大纲）；当前文件被改写后自动重读、视口按源行留在原处 | ✅ |
-| 终端版交互：鼠标拖选 / 双击选词 / 三击选行，`y` / ⌘C 复制（装饰不复制，JSON 折叠态复制完整内容）；复制文件名 / 绝对路径 / 相对路径 / 全文 / 「路径:行号」（选中时状态栏显示）；`:行号` 跳行；`?` 帮助浮层；配色跟随终端明暗（以 OSC 11 背景色为准） | ✅ |
+| 终端版交互：鼠标拖选 / 双击选词 / 三击选行，`y` / ⌘C 复制（装饰不复制，JSON 折叠态复制完整内容）；复制文件名 / 绝对路径 / 相对路径 / 全文 / 「路径:行号」（选中时状态栏显示）；`:行号` 跳行；`/` 全文搜索（`n` / `N` 前后跳，大文件在后台分批搜）；`?` 帮助浮层；配色跟随终端明暗（以 OSC 11 背景色为准） | ✅ |
 | 端到端冷启计时验收（plan W5） | ⏳ 后续 |
 | 全局主题统一（`PeekyTheme` 覆盖侧栏 / 源码高亮 / Markdown） | ⏳ 后续 |
 
@@ -79,12 +79,14 @@ peek-tui → PeekTUIMain → TerminalSession / TUIRuntime / PlainOutput
 TUIRuntime → TUIReducer / FrameRenderer / ScreenEncoder / InputParser
            → TextFileLoader / DocumentPreparer / MarkdownLayout
            → HighlightService / DirectoryLister / DirectoryWatcher
+           → SearchEngine
 TUIReducer → DocumentLayout / JSONView / FileTree / SelectionText
 FrameRenderer → DocumentLayout / SidebarRenderer / HelpOverlay
 ```
-- `TUIRuntime`：唯一有状态的对象，执行副作用（读文件、列目录、监听磁盘、写剪贴板），调度渲染。
-- `TUIReducer`：纯函数，事件 → 新状态 + 副作用；侧栏与复制类动作的分支在 `SidebarReducer.swift` / `ActionReducer.swift` 两个扩展文件里。
+- `TUIRuntime`：唯一有状态的对象，执行副作用（读文件、列目录、监听磁盘、写剪贴板、后台分批搜索），调度渲染。
+- `TUIReducer`：纯函数，事件 → 新状态 + 副作用；侧栏、复制类动作、搜索的分支在 `SidebarReducer.swift` / `ActionReducer.swift` / `SearchReducer.swift` 三个扩展文件里。
 - `FrameRenderer`：纯函数，状态 → 一帧 `CellBuffer`；`ScreenEncoder`：前后两帧的差异 → 转义序列。
+- `SearchEngine`：纯函数，在按行文本或 Markdown 排版行里找搜索词，结果是「行 + 视觉列区间」。
 - `PlainOutput`：标准输出不是终端时输出的纯文字。
 
 ## 关键约定

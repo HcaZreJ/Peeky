@@ -22,7 +22,7 @@ extension TUIReducer {
         case (.character("Y"), []):
             guard let file = state.activeFile else { return [] }
             return [.copyFileText(file), showToast("已复制全文", state: &state)]
-        case (.character("n"), []):
+        case (.character("F"), []):
             guard let file = state.activeFile else { return [] }
             return [.copy(text: file.lastPathComponent, description: "文件名"), showToast("已复制文件名", state: &state)]
         case (.character("p"), []):

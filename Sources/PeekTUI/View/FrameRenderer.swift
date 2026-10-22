@@ -33,6 +33,9 @@ package enum FrameRenderer {
             let layout = DocumentLayout(document: document, columns: state.contentColumns, wrapsLines: state.wrapsLines, appearance: appearance)
             let contentAppearance = contentAppearance(for: document, appearance: appearance)
             drawContent(&body, layout: layout, viewport: state.viewport, height: state.contentHeight, appearance: contentAppearance)
+            if let search = state.search, !search.matches.isEmpty {
+                drawSearchMatches(&body, search: search, layout: layout, viewport: state.viewport, height: state.contentHeight, colors: ChromeColors.forAppearance(contentAppearance))
+            }
             if let selection = state.selection, !selection.isEmpty {
                 drawSelection(&body, selection: selection, layout: layout, viewport: state.viewport, height: state.contentHeight, color: ChromeColors.forAppearance(contentAppearance).selection)
             }
@@ -41,7 +44,8 @@ package enum FrameRenderer {
             let wrapHint = state.wrapsLines || layout.markdownRows != nil ? "" : "不换行  "
             let jqPath = document.json?.paths(forSourceLine: cursorSource).map { JSONPathMap.truncatedForDisplay($0.jq, limit: 60) + "  " } ?? ""
             let selected = state.selection.flatMap { $0.isEmpty ? nil : "选中 \(SelectionText.text($0, layout: layout).count) 字符  " } ?? ""
-            statusRight = "\(selected)\(jqPath)\(wrapHint)\(position)  \(helpHint)"
+            let searchSummary = state.search.map { searchSummaryText($0) + "  " } ?? ""
+            statusRight = "\(selected)\(searchSummary)\(jqPath)\(wrapHint)\(position)  \(helpHint)"
             let leftWidth = state.size.columns - TextWidth.width(of: statusRight) - 3
             statusLeft = state.toast ?? document.progressNote ?? selectionReferenceHint(state, width: leftWidth) ?? ""
         }
@@ -50,6 +54,7 @@ package enum FrameRenderer {
             SidebarRenderer.draw(&frame, state: state, sidebar: sidebar, width: state.sidebarWidth)
         }
         if let input = state.lineInput { statusLeft = ":" + input }
+        if let input = state.searchInput { statusLeft = "/" + input }
         drawStatusBar(&frame, row: statusRow, left: statusLeft, right: statusRight, appearance: appearance)
         if state.isHelpVisible { HelpOverlay.draw(&frame, appearance: appearance) }
         return frame
@@ -69,6 +74,44 @@ package enum FrameRenderer {
     private static func contentAppearance(for document: OpenedDocument, appearance: PeekyPalette.Appearance) -> PeekyPalette.Appearance {
         if case .source = document.presentation { return .dark }
         return appearance
+    }
+
+    /// 状态栏里的搜索概况：`/词 3/17`（有当前匹配）、`/词 17 处`、`/词 无匹配`；还在搜时末尾加「…」，
+    /// 超过上限时数目后加「+」。
+    static func searchSummaryText(_ search: SearchState) -> String {
+        let query = "/" + SidebarRenderer.fitted(search.query, width: 20)
+        let count = search.matchCount
+        if search.isComplete, count == 0 { return "\(query) 无匹配" }
+        if !search.isComplete, count == 0 { return "\(query) 搜索中…" }
+        let total = "\(count)\(search.isTruncated ? "+" : "")"
+        let pending = search.isComplete ? "" : "…"
+        guard let current = search.current else { return "\(query) \(total) 处\(pending)" }
+        let ordinal = search.matches[...current].count(where: { !$0.isContinuation })
+        return "\(query) \(ordinal)/\(total)\(pending)"
+    }
+
+    /// 视口里的匹配铺底色，当前匹配用更深的颜色。JSON 的折叠行不画（它显示的不是源行原文）。
+    private static func drawSearchMatches(_ frame: inout CellBuffer, search: SearchState, layout: DocumentLayout, viewport: Viewport, height: Int, colors: ChromeColors) {
+        let current = search.currentSegments
+        let positions = viewport.visibleRows(lineCount: layout.lineCount, height: height, rows: layout.rows)
+        for (index, position) in positions.enumerated() {
+            guard let position else { continue }
+            let line = TUIReducer.searchLine(forDisplayLine: position.line, document: layout.document)
+            if layout.document.json?.isCollapsed(sourceLine: line) == true { continue }
+            let visible = layout.visualRange(line: position.line, row: position.row, horizontalOffset: viewport.horizontalOffset)
+            let offset = layout.gutterWidth - visible.lowerBound
+            var matchIndex = search.firstIndex(onOrAfter: line)
+            while matchIndex < search.matches.count, search.matches[matchIndex].line == line {
+                let columns = search.matches[matchIndex].columns
+                let lower = max(columns.lowerBound, visible.lowerBound)
+                let upper = min(columns.upperBound, visible.upperBound)
+                if lower < upper {
+                    let color = current?.contains(matchIndex) == true ? colors.currentSearchMatch : colors.searchMatch
+                    frame.setBackground(row: index + 1, from: lower + offset, to: upper + offset, color: color)
+                }
+                matchIndex += 1
+            }
+        }
     }
 
     /// 选中的格子铺选区底色；整行选中的行在行尾多铺一格，表示换行也在选区里。

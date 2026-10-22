@@ -107,6 +107,49 @@ package struct OpenedDocument: Equatable, Sendable {
     }
 }
 
+/// 一次搜索：搜索词、陆续到达的匹配（按文档顺序）、当前匹配。
+package struct SearchState: Equatable, Sendable {
+    package let query: String
+    /// 每次发起搜索递增；迟到的结果与它不符时丢弃
+    package let id: Int
+    package var matches: [SearchMatch] = []
+    package var isComplete = false
+    /// 匹配太多，只记了前 `SearchEngine.maximumMatches` 段
+    package var isTruncated = false
+    /// 当前匹配在 `matches` 里的下标（指向一处匹配的第一段）
+    package var current: Int?
+    /// 回车后还没跳过去：结果到达时跳到第一个不早于这一行（搜索坐标）的匹配
+    package var pendingJumpFrom: Int?
+
+    package init(query: String, id: Int, pendingJumpFrom: Int? = nil) {
+        self.query = query
+        self.id = id
+        self.pendingJumpFrom = pendingJumpFrom
+    }
+
+    /// 一处匹配算一个（不算续段）。
+    package var matchCount: Int { matches.count(where: { !$0.isContinuation }) }
+
+    /// 第一个落在 `line` 行或之后的匹配段的下标。
+    package func firstIndex(onOrAfter line: Int) -> Int {
+        var low = 0
+        var high = matches.count
+        while low < high {
+            let middle = (low + high) / 2
+            if matches[middle].line < line { low = middle + 1 } else { high = middle }
+        }
+        return low
+    }
+
+    /// 当前匹配的全部段（第一段加上紧跟的续段）。
+    package var currentSegments: Range<Int>? {
+        guard let current else { return nil }
+        var end = current + 1
+        while end < matches.count, matches[end].isContinuation { end += 1 }
+        return current..<end
+    }
+}
+
 package enum DocumentState: Equatable, Sendable {
     case loading(path: String)
     case loaded(OpenedDocument)
@@ -293,6 +336,12 @@ package struct TUIState: Equatable, Sendable {
     package var isHelpVisible = false
     /// `:` 之后输入的行号；不在输入时为 nil。
     package var lineInput: String?
+    /// `/` 之后输入的搜索词；不在输入时为 nil。
+    package var searchInput: String?
+    /// 最近一次搜索；Esc 清掉。换文档、重读、Markdown 重排后用同一个词重搜。
+    package var search: SearchState?
+    /// 发起过几次搜索（搜索的代际）。
+    package var searchCount = 0
     /// 每设一次提示加一；过期计时带着它，后来的提示不会被前一个计时清掉。
     package var toastToken = 0
     /// 终端的明暗；收到 OSC 11 背景色或 DSR 996 回复之前按深色。

@@ -20,6 +20,8 @@ package enum TUIEvent: Equatable, Sendable {
     case fileStamp(FileStamp?, generation: Int)
     /// 提示到时间了；令牌不是最新提示的就不清
     case toastExpired(Int)
+    /// 一批搜索结果（按文档顺序）；`isComplete` 时是最后一批
+    case searchResults([SearchMatch], id: Int, generation: Int, isComplete: Bool, isTruncated: Bool)
 }
 
 /// reducer 产出的副作用，由 `TUIRuntime` 执行。
@@ -55,6 +57,8 @@ package enum TUIEffect: Equatable, Sendable {
     case expireToast(Int)
     /// 再问一次终端背景色（OSC 11），回复以 `.input(.backgroundColor)` 送回
     case queryBackground
+    /// 在后台搜索，结果以 `.searchResults` 分批送回；发起新搜索时旧的停掉
+    case search(id: Int, generation: Int, query: String, corpus: SearchCorpus)
 }
 
 /// 纯函数：根据事件更新状态，返回要执行的副作用。
@@ -86,7 +90,7 @@ package enum TUIReducer {
             withLayout(&state) { viewport, layout, height in
                 viewport.moveCursor(to: document.line(forSourceLine: cursorSource), lineCount: layout.lineCount, height: height, rows: layout.rows)
             }
-            return []
+            return rerunSearch(&state)
         case let .jsonIndexed(view, generation):
             guard generation == state.generation, case var .loaded(document) = state.document else { return [] }
             document.json = view
@@ -125,13 +129,21 @@ package enum TUIReducer {
         case let .toastExpired(token):
             if token == state.toastToken { state.toast = nil }
             return []
+        case let .searchResults(matches, id, generation, isComplete, isTruncated):
+            guard generation == state.generation else { return [] }
+            return searchResultsArrived(matches, id: id, isComplete: isComplete, isTruncated: isTruncated, state: &state)
+        case let .input(.paste(text)):
+            pasteIntoSearchInput(text, state: &state)
+            return []
         case let .input(.key(rawPress)):
             let press = normalized(rawPress)
             state.toast = nil
             if state.isHelpVisible { return handleHelpKey(&state) }
             if let input = state.lineInput { return handleLineInput(press, input: input, state: &state) }
+            if let input = state.searchInput { return handleSearchInput(press, input: input, state: &state) }
             if let effects = handleGlobalKey(press, state: &state) { return effects }
             if let effects = handleActionKey(press, state: &state) { return effects }
+            if let effects = handleSearchKey(press, state: &state) { return effects }
             return state.focus == .sidebar ? handleSidebarKey(press, state: &state) : handleKey(press, state: &state)
         case let .input(.mouse(mouse)):
             if case .press = mouse.kind { state.toast = nil }
@@ -249,8 +261,8 @@ package enum TUIReducer {
                 state.targetLine = nil
             }
         }
-        // 读文件期间明暗变了时按新明暗重排
-        let relayout = relayoutMarkdownIfNeeded(state)
+        // 读文件期间明暗变了时按新明暗重排；有搜索词时在新内容里重搜
+        let relayout = relayoutMarkdownIfNeeded(state) + rerunSearch(&state)
         switch document.presentation {
         case let .source(language):
             return [.startHighlight(generation: state.generation, text: document.store.text, language: language)]
@@ -330,6 +342,10 @@ package enum TUIReducer {
             guard case .loaded = state.document else { return [] }
             state.lineInput = ""
             return []
+        case (.character("/"), []):
+            guard case .loaded = state.document else { return [] }
+            state.searchInput = ""
+            return []
         default:
             return nil
         }
@@ -356,7 +372,11 @@ package enum TUIReducer {
             }
             return []
         case (.escape, []):
-            state.selection = nil
+            if state.selection != nil {
+                state.selection = nil
+            } else {
+                state.search = nil
+            }
             return []
         case (.enter, []):
             if toggleFold(atDisplayLine: state.viewport.cursor, state: &state) { return [] }
