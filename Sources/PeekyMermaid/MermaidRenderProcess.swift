@@ -100,8 +100,12 @@ final class MermaidRenderProcess: NSObject, WKNavigationDelegate {
 
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         MainActor.assumeIsolated {
-            Task { await renderAll() }
+            startRendering()
         }
+    }
+
+    private func startRendering() {
+        Task { await renderAll() }
     }
 
     private func renderAll() async {

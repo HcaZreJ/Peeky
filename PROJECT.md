@@ -12,7 +12,7 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 | 文件树与磁盘保持同步：FSEvents 监听树根，已展开目录的内容一变就地重列、最前 tab 的文件内容一变就地重读（留在原阅读位置）；展开某目录、⌘R（View 菜单 Refresh from Disk）同样触发对账。刷新范围收窄到「此刻看得见的东西」——没展开的目录与后台 tab 的文件走惰性，各自在展开时 / 切过去时才对账 | ✅ |
 | 侧栏三个 tab（Open / Files / Contents）单选切换；Markdown 无大纲时 Contents 置灰回退 Files；选择通过 UserDefaults 持久化 | ✅ |
 | `peek` shell 包装（`bin/peek`），`build-app.sh --install` 一并部署到 `~/Applications` 与 `~/.local/bin` | ✅ |
-| Markdown：swift-markdown 解析为 HTML（`MarkdownHTMLRenderer`），WKWebView 用 github-markdown.css 渲染；支持表格、任务列表、嵌套引用、围栏代码块、标题分隔线等 GFM 特性；侧栏大纲支持点击跳转；正文链接点击交系统默认浏览器/程序打开（文档内锚点留在页内），预览停留在当前文档；代码块内语法高亮跟踪于 issue #16 | ✅ |
+| Markdown：swift-markdown 解析为 HTML（`MarkdownHTMLRenderer`），WKWebView 用 github-markdown.css 渲染；支持表格、任务列表、嵌套引用、围栏代码块、标题分隔线等 GFM 特性；侧栏大纲支持点击跳转；正文链接点击交系统默认浏览器/程序打开（文档内锚点留在页内），预览停留在当前文档；` ```mermaid ` 代码块画成图（mermaid.js 11.17.2，只在文档含图时加载；跟随系统明暗、切换时重画；语法错误时保留源码并写出原因）；代码块内语法高亮跟踪于 issue #16 | ✅ |
 | JSON / JSONL：缩进格式化 + 词法高亮（键 / 字符串 / 数字 / bool / null / 标点）+ ⌘C 选中复制；可视区惰性上色（`NSLayoutManager` 临时属性，只处理屏幕可见行），大文件不阻塞；跟随系统明暗；JSONL 解析失败的行以红色标注 | ✅ |
 | JSON / JSONL 交互：gutter 折叠三角（对象和数组点击折叠/展开，行号连续）、折叠占位符 `⟷`、缩进虚线导轨、底部状态栏（行、列、选中字符数、文件大小，坐标以源文件为准）、双击选中整个 element、折叠状态下复制展开为完整 JSON；折叠映射与坐标计算是纯函数模块（`JSONFoldMap` / `JSONFoldComposer`），配色新增 7 个语义 token 到 `PeekyTheme` | ✅ |
 | JSON / JSONL 节点路径：光标所在行的 jq 路径常驻显示在底部状态栏（超 60 字符中段省略），选区浮动 "jq path" chip 一键复制——点击复制 jq 表达式（`.users[0].user.phone`，可直接 `jq '<粘贴>' file.json`），⌥ 点击复制点分形态（`users.0.user.phone`）；逐行路径索引是纯函数模块 `JSONPathMap`（父指针树，避免逐行物化路径数组），仅在 JSON 结构解析成功时建立，语法错误的文件不显示推测路径 | ✅ |
@@ -24,7 +24,7 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 | 拖放打开 / Finder 打开方式 / 三档大小上限（文件读取 80 MB、富格式化 8 MB、语法高亮 1.5M UTF-16 字符） | ✅ |
 | 最近打开的文件：File ▸ Open Recent 子菜单 + 空白窗口（没打开文件时）里的 Recent Files 列表，最多 20 条、最新在前、跨重启保留（UserDefaults `PeekyRecentFiles`，终端版共用这份记录），Clear Menu / Clear 清空。每条写文件名 + 位置（仓库名、`仓库 › worktree 名`、或仓库外的 `~` 缩写父目录；同一仓库内同名才补目录）。打不开的条目保留、置灰、不可点，行尾写原因：所在 git worktree 整个不在了写 `Worktree deleted`，其余写 `File moved or deleted`；悬停提示给完整路径与一句说明 | ✅ |
 | 终端版 `peek-tui`：在当前终端里全屏打开文件或目录，`q` 退出；`peek` 在终端里运行时 exec 它，`--app` 或标准输出不是终端时走 app；随 app 打包在 `Contents/MacOS/`；输出到管道时输出排好版的纯文字 | ✅（Ghostty 分栏实测待用户） |
-| 终端版显示：纯文本、源码（shiki 高亮，固定 Dark Modern 底）、XML / plist、Markdown（按终端宽度排版：表格、列表、引用、代码块、链接 OSC 8；H1 / H2 在 kitty 下用 OSC 66 真文字放大、在 Ghostty 下画成图片；kitty / Ghostty 下单独成段的本地图片显示成图片）、JSON / JSONL（折叠、jq 路径常驻状态栏、坏行标红）；超过 1 MB 需格式化的文件先显示原文再替换 | ✅ |
+| 终端版显示：纯文本、源码（shiki 高亮，固定 Dark Modern 底）、XML / plist、Markdown（按终端宽度排版：表格、列表、引用、代码块、链接 OSC 8；H1 / H2 在 kitty 下用 OSC 66 真文字放大、在 Ghostty 下画成图片；kitty / Ghostty 下单独成段的本地图片与 ` ```mermaid ` 代码块显示成图片，Mermaid 图由 app 包里的 `peeky-mermaid` 在后台画，画好前显示代码）、JSON / JSONL（折叠、jq 路径常驻状态栏、坏行标红）；超过 1 MB 需格式化的文件先显示原文再替换 | ✅ |
 | 终端版侧栏：Open（打开的文件 + 与 app 共用的最近打开）、Files（版本库根的文件树，磁盘变化 1 秒内同步；切到仓库外的文件时换树根）与 Contents（Markdown 1–4 级标题大纲）；一次可开多个文件，`[` / `]` 切换、`x` 关掉，各自保留视口与折叠；当前文件被改写后自动重读、视口按源行留在原处 | ✅ |
 | 终端版交互：鼠标拖选 / 双击选词 / 三击选行，`y` / ⌘C 复制（装饰不复制，JSON 折叠态复制完整内容）；复制文件名 / 绝对路径 / 相对路径 / 全文 / 「路径:行号」（选中时状态栏显示）；`:行号` 跳行；`/` 全文搜索（`n` / `N` 前后跳，大文件在后台分批搜）；`?` 帮助浮层；配色跟随终端明暗（以 OSC 11 背景色为准） | ✅ |
 | 端到端冷启计时验收（plan W5） | ⏳ 后续 |
@@ -47,9 +47,10 @@ Peeky 是 macOS 上的原生只读文件查看器，面向从终端触发的开�
 - `JSONPathSegment`（key(String) / index(Int)）+ `JSONPathMap { nodes: [Node], lineNode: [Int32] }`：pretty JSON 文本的逐行节点路径索引。父指针树存储——`Node = { parent: Int32, segment }`，`lineNode` 每行一个节点下标（-1 为根），`path(line:)` 沿 parent 回溯物化。`build` 单遍 UTF-16 扫描；空行是 JSONL 记录边界（清栈隔离坏行），但空行紧跟 `{` / `[` 时属于空容器内部不清栈。`jqExpression` 产出可直接执行且可安全放进 shell 单引号的表达式（非标识符 key 走 `."..."`，单引号输出为 unicode 转义）；`dotPath` 产出 `users.0.user.phone`
 
 ## 模块地图（依赖自上而下）
-三个库 target，各带一个入口：
-- **PeekyCore**：不依赖 AppKit / WebKit 的公共核心，app 与终端版共用——TextFileLoader、FileKind、OpenRequest、JSON 四件套、XMLFormatter、MarkdownRenderer、MarkdownHTMLRenderer、MarkdownLinkPolicy、HighlightService、RepoRoot、DirectoryLister、DirectoryWatcher、FileTreeNode、FileTreeRefresh、FileTreeIndentGuide、RecentFiles、LastModifiedText、PreviewDisplayMetadata、PeekyPalette、PreviewBudget、CoreResources，以及 shiki-bundle.js / github-markdown.css 资源。类型以 `package` 访问级别对包内其它 target 可见。
+四个库 target：PeekyCore 是公共核心，其余三个各带一个入口：
+- **PeekyCore**：不依赖 AppKit / WebKit 的公共核心，app 与终端版共用——TextFileLoader、FileKind、OpenRequest、JSON 四件套、XMLFormatter、MarkdownRenderer、MarkdownHTMLRenderer、MarkdownLinkPolicy、HighlightService、RepoRoot、DirectoryLister、DirectoryWatcher、FileTreeNode、FileTreeRefresh、FileTreeIndentGuide、RecentFiles、LastModifiedText、PreviewDisplayMetadata、PeekyPalette、PreviewBudget、CoreResources、MermaidDiagram（mermaid 块识别、读 mermaid.js），以及 shiki-bundle.js / github-markdown.css / mermaid.min.js 资源。类型以 `package` 访问级别对包内其它 target 可见。
 - **PeekyKit**：app 的 AppKit / WebKit 界面代码，依赖 PeekyCore；入口 `Peeky`。
+- **PeekyMermaid**：离屏 WKWebView 把 Mermaid 源码画成透明底 PNG（`MermaidRenderJob` 解析命令行、`MermaidRenderProcess` 渲染），依赖 PeekyCore；入口 `peeky-mermaid`，打包在 `Contents/Helpers/`，供终端版在后台调用。
 - **PeekTUI**：终端版，依赖 PeekyCore，零 AppKit；入口 `peek-tui`。目录分层：Screen（字宽、格子、差异编码）、Input（输入解析）、Terminal（终端会话进出）、Document（显示规则、按行存储、折行、Markdown 排版、着色、选区文字）、Sidebar（文件树、侧栏状态与渲染）、App（状态、reducer、唯一有状态的 `TUIRuntime`）、View（画面渲染、帮助浮层、界面色）。
 
 ### app（PeekyKit）
@@ -87,6 +88,7 @@ FrameRenderer → DocumentLayout / SidebarRenderer / HelpOverlay
 - `TUIReducer`：纯函数，事件 → 新状态 + 副作用；侧栏、多文件、复制类动作、搜索的分支在 `SidebarReducer.swift` / `TabsReducer.swift` / `ActionReducer.swift` / `SearchReducer.swift` 四个扩展文件里。
 - `FrameRenderer`：纯函数，状态 → 一帧 `CellBuffer`；`ScreenEncoder`：前后两帧的差异 → 转义序列。
 - `SearchEngine`：纯函数，在按行文本或 Markdown 排版行里找搜索词，结果是「行 + 视觉列区间」。
+- `DiagramRenderer`：找渲染辅助程序（app 包的 `Contents/Helpers/peeky-mermaid`，开发构建里与 peek-tui 同目录），在后台跑它画 Mermaid 图，管理每进程一个的 PNG 临时目录。
 - `PlainOutput`：标准输出不是终端时输出的纯文字。
 
 ## 关键约定
