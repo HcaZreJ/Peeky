@@ -61,6 +61,12 @@ extension TUIReducer {
                 effects.append(.startHighlight(generation: state.generation, text: document.store.text, language: language))
             case .markdown:
                 effects += relayoutMarkdownIfNeeded(state)
+                // 切走期间画好的 Mermaid 图因代际不符被丢掉了：没拿到结果的重新画
+                if case var .loaded(refreshed) = state.document {
+                    refreshed.requestedDiagrams = []
+                    state.document = .loaded(refreshed)
+                }
+                effects += renderDiagramsIfNeeded(&state)
                 if document.markdownCodeTokens.isEmpty {
                     effects.append(.highlightMarkdownCode(generation: state.generation, source: document.store.text))
                 }

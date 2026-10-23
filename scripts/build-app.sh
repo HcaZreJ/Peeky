@@ -8,17 +8,21 @@ cd "$ROOT_DIR"
 # 漏传 Testing 的宏插件（见 DEVFLOW），release 构建因此失败——而打包本来就不需要测试 target。
 swift build -c release --product Peeky
 swift build -c release --product peek-tui
+swift build -c release --product peeky-mermaid
 
 APP_DIR="$ROOT_DIR/.build/Peeky.app"
 rm -rf "$APP_DIR"
-mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Helpers" "$APP_DIR/Contents/Resources"
 
 cp "$ROOT_DIR/.build/release/Peeky" "$APP_DIR/Contents/MacOS/Peeky"
 # 终端版与 app 同包发布;peek 在终端里运行时直接换成它。
 cp "$ROOT_DIR/.build/release/peek-tui" "$APP_DIR/Contents/MacOS/peek-tui"
+# 终端版画 Mermaid 图的辅助程序。放在 Helpers 而不是 MacOS：MacOS 里的程序运行时会被系统当成正在运行的
+# Peeky，peek --app（open -a Peeky.app）的打开请求会送到它那里丢掉。
+cp "$ROOT_DIR/.build/release/peeky-mermaid" "$APP_DIR/Contents/Helpers/peeky-mermaid"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 cp "$ROOT_DIR/Resources/Peeky.icns" "$APP_DIR/Contents/Resources/Peeky.icns"
-chmod +x "$APP_DIR/Contents/MacOS/Peeky" "$APP_DIR/Contents/MacOS/peek-tui"
+chmod +x "$APP_DIR/Contents/MacOS/Peeky" "$APP_DIR/Contents/MacOS/peek-tui" "$APP_DIR/Contents/Helpers/peeky-mermaid"
 
 # peek CLI 打进 bundle,Homebrew Cask 用 binary stanza 直接 symlink 到 PATH。
 cp "$ROOT_DIR/bin/peek" "$APP_DIR/Contents/Resources/peek"
@@ -40,6 +44,8 @@ for resource_bundle in "$ROOT_DIR"/.build/release/*.bundle; do
   cp -R "$resource_bundle" "$APP_DIR/Contents/Resources/"
 done
 
+# Helpers 里的程序是嵌套代码，先单独签名，外层签名才能封住它。
+codesign --force --sign - "$APP_DIR/Contents/Helpers/peeky-mermaid"
 codesign --force --sign - "$APP_DIR"
 
 echo "$APP_DIR"

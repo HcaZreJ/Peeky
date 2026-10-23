@@ -84,6 +84,7 @@ package final class TUIRuntime {
     private func perform(_ effect: TUIEffect) {
         switch effect {
         case .quit:
+            DiagramRenderer.removeFiles()
             terminal.write(sentImages.map(ImagePlaceholder.deletion).joined())
             terminal.restore()
             exit(0)
@@ -147,6 +148,8 @@ package final class TUIRuntime {
                 }
                 await self?.dispatch(.imagesProbed(sizes, generation: generation))
             }
+        case let .renderDiagrams(sources, generation):
+            renderDiagrams(sources, generation: generation)
         case let .discoverTreeRoot(url):
             Task.detached(priority: .userInitiated) { [weak self] in
                 let repoRoot = RepoRoot.discover(from: url)
@@ -206,6 +209,21 @@ package final class TUIRuntime {
             }
             guard !tokens.isEmpty else { return }
             await self?.dispatch(.markdownCodeHighlighted(tokens, generation: generation))
+        }
+    }
+
+    /// 画 Mermaid 图的程序（与 peek-tui 同目录的 Peeky）；找不到时 Mermaid 块按代码显示。
+    nonisolated private static let diagramRenderer = DiagramRenderer.executable(
+        nextTo: DiagramRenderer.runningBinaryPath(),
+        isExecutable: FileManager.default.isExecutableFile(atPath:)
+    )
+
+    /// 在后台请 app 把 Mermaid 源码画成 PNG，画好（或画不出）后一次送回。
+    private func renderDiagrams(_ sources: [MarkdownDiagramSource], generation: Int) {
+        guard let renderer = Self.diagramRenderer else { return }
+        Task.detached(priority: .utility) { [weak self] in
+            let images = await DiagramRenderer.render(sources, executable: renderer)
+            await self?.dispatch(.diagramsRendered(images, generation: generation))
         }
     }
 
@@ -342,6 +360,7 @@ package final class TUIRuntime {
                     if signalNumber == SIGWINCH {
                         self.handleResize()
                     } else {
+                        DiagramRenderer.removeFiles()
                         self.terminal.restore()
                         exit(128 + signalNumber)
                     }
@@ -447,6 +466,7 @@ package final class TUIRuntime {
             stamp: stamp
         )
         document.imageSizes = style.images?.sizes ?? [:]
+        document.diagramImages = style.images?.diagrams ?? [:]
         guard prepared.presentation.isJSON else {
             await emit(.loaded(document, generation: generation))
             return

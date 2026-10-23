@@ -79,7 +79,7 @@ let package = Package(
                 .product(name: "Markdown", package: "swift-markdown")
             ],
             path: "Sources/PeekyCore",
-            resources: [.copy("Resources/shiki-bundle.js"), .copy("Resources/github-markdown.css")],
+            resources: [.copy("Resources/shiki-bundle.js"), .copy("Resources/github-markdown.css"), .copy("Resources/mermaid.min.js")],
             // `PeekyTests` needs `@testable import` in every build
             // configuration: `swift build -c release` (no --product filter)
             // builds every target in the package, including PeekyTests.
@@ -95,6 +95,19 @@ let package = Package(
             name: "Peeky",
             dependencies: ["PeekyKit"],
             path: "Sources/Peeky"
+        ),
+        // Mermaid diagrams → PNG with an offscreen WKWebView; the terminal UI
+        // runs it in the background (shipped in Peeky.app/Contents/Helpers).
+        .target(
+            name: "PeekyMermaid",
+            dependencies: ["PeekyCore"],
+            path: "Sources/PeekyMermaid",
+            swiftSettings: [.unsafeFlags(["-enable-testing"])]
+        ),
+        .executableTarget(
+            name: "peeky-mermaid",
+            dependencies: ["PeekyMermaid"],
+            path: "Sources/peeky-mermaid"
         ),
         // Terminal UI: opens a file inside the current terminal split.
         .target(
@@ -113,7 +126,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "PeekyTests",
-            dependencies: ["PeekyKit", "PeekyCore", "PeekTUI"],
+            dependencies: ["PeekyKit", "PeekyCore", "PeekTUI", "PeekyMermaid"],
             path: "Tests",
             swiftSettings: testSwiftSettings,
             linkerSettings: testLinkerSettings

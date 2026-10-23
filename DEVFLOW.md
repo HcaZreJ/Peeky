@@ -8,6 +8,8 @@
 | `swift run Peeky <path>` | 从源码直接运行（无 Finder 集成） |
 | `swift run Peeky <path>:<line>` | 打开并跳到指定行 |
 | `swift build --product peek-tui` | 构建终端版 |
+| `swift build --product peeky-mermaid` | 构建 Mermaid 渲染辅助程序（开发构建的终端版找同目录的它画图；没构建时 Mermaid 块显示代码） |
+| `.build/out/Products/Debug/peeky-mermaid --appearance dark\|light <源码> <输出.png> [<源码> <输出.png> …]` | 直接把 Mermaid 源码画成 PNG（退出码 0 全部画出、1 有图画不出来、2 找不到 mermaid.js、3 超时、64 参数不对） |
 | `./.build/out/Products/Debug/peek-tui <path>[:<line>]` | 在当前终端里打开文件（q 退出）；标准输出不是终端时直接输出文本 |
 | `PEEK_TUI_TRACE=1 ./.build/out/Products/Debug/peek-tui <path>` | 把读文件 / 格式化 / 切行 / JSON 索引各阶段耗时写进 `$TMPDIR/peek-tui.log`（测性能用 release 构建：`swift build -c release --product peek-tui`，二进制在 `.build/out/Products/Release/`） |
 | `bash scripts/tui-smoke.sh <path> [按键 \| !命令 ...]` | 终端版冒烟：隐藏的 kitty 窗口里运行，逐个发送按键并读回屏幕文字；`!` 开头的参数改为执行 shell 命令（模拟外部新建 / 改写文件）并等 1 秒；鼠标用 SGR 序列模拟（如 `"\x1b[<0;31;2M\x1b[<32;42;2M\x1b[<0;42;2m"` 是在第 2 行从第 31 列拖到第 42 列，坐标 1 起算），⌘C 用 `"\x1b[99;9u"`；最后按 q 并检查终端设置已还原（需已安装 kitty；`COLS` / `ROWS` 设窗口格数；`KITTY_ARGS` 传额外 kitty 选项；`!` 命令里可用 `kitty @ --to "$KITTY_SOCKET" set-colors background=#101010` 改终端背景，模拟明暗切换） |
@@ -15,6 +17,7 @@
 | `bash scripts/build-app.sh` | 构建 app 与终端版，组装 `.build/Peeky.app`（终端版在 `Contents/MacOS/peek-tui`）+ ad-hoc codesign（正式身份，供 CI 打包）；`--install` 装到 `~/Applications/Peeky Dev.app`，转成 dev 身份（`local.peeky.dev` / `peeky-dev://` / 独立 Preferences），symlink `~/.local/bin/peek` |
 | `swift build --product PeekyTests && ./.build/out/Products/Debug/PeekyTests` | 运行全部测试（可加 `--filter <suite>`） |
 | `scripts/run-hidden-tests.sh <unit>` | 运行该单元的 hidden 测试，仅输出 `PASSED: X/Y` |
+| `bash scripts/build-mermaid-bundle.sh` | 重新生成 `Sources/PeekyCore/Resources/mermaid.min.js`（幂等；升级 mermaid 时先改脚本里的版本与 integrity） |
 | `node scripts/build-shiki-bundle.mjs` | 重新生成 `Sources/PeekyCore/Resources/shiki-bundle.js`（幂等；改语言或主题后运行） |
 | `node scripts/shiki-bundle/smoke.mjs` | bundle 冒烟测试：3 种语言 tokenize + dark_modern 配色 + 分块续接断言 |
 | `bash scripts/record-demo.sh` | 生成 README 用的 hero 视频与三张截图；子命令 `--stills` `--video`，屏幕索引 `--screen N` |
@@ -90,6 +93,7 @@ brew upgrade --cask peeky
   展开五层目录后按 ⌘R，树保持原来的展开层级与选中行。
   当前正在预览的文件被外部改写时，正文就地更新且停在原来的滚动位置（markdown 与非 markdown 两条路径都要看）；
   切到另一个 tab 再切回来，期间被改写的内容在切回的那一刻落地。无树根（空窗口）时 View 菜单的 Refresh from Disk 置灰。
+- 含 ` ```mermaid ` 代码块的 Markdown：浅色与深色下都画成图，切换系统明暗后图跟着换；写错的图保留源码，下面一行红字写原因；`peek --app <md>:<行>` 跳到图后面的标题时位置正确。
 - 顶栏按钮逐个 hover：出浅底并浮出 tooltip，浅色深色下浅底都看得见；打开非 repo 内的文件时「复制相对路径」明显变暗。tab 卡片上的 × 与 Close All 同样有浅底。
 - 顶栏 6 个按钮成组停在窗口右端，拖宽窗口时保持成组、不被拉开；标题过长时中段省略，按钮组位置不动。六颗的图标与 Content / Name / Full path / Rel path / Finder / More 六行文字在浅色深色下都读得清。
 - 打开任意文件，顶栏文件名下面一行以「最后更改于：yyyy 年 MM 月 dd 日 HH:mm:ss」开头，与 Finder 的「修改日期」一致（精确到秒）；在外部改写这个文件，这一段随正文一起刷新；把窗口拖窄，这一行从尾部省略，时间一段最后才被截，按钮组不被挤出窗口。
@@ -103,3 +107,4 @@ brew upgrade --cask peeky
   JSON 回车折叠、`M` / `R` 全部折叠展开，状态栏 jq 路径随光标变；拖选后 `y`，`pbpaste` 内容与选中一致。
   侧栏在仓库里新建文件 1 秒内出现；外部改写当前文件后正文更新、停在原来的行。
   切换系统明暗（两个终端都配了深浅两套主题时），终端版配色随之变化；源码视图保持深色底。
+  含 ` ```mermaid ` 代码块的 Markdown：先显示代码，约 1 秒内换成图；切换明暗后换成对应主题的图；拖选图后 `y` 复制得到 Mermaid 源码；画图期间 `peek --app <md>` 照常打开 app 窗口；`q` 退出后 `$TMPDIR` 下没有 `peek-tui-mermaid-*` 目录。
