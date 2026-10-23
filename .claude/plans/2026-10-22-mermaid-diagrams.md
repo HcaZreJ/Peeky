@@ -1,6 +1,6 @@
 # Feature: Markdown 里的 Mermaid 图画成图（app 与终端版，issue #51）
 
-**Status**：调研与设计完成（2026-10-22）；W1–W6 未开始。分支 `worktree-mermaid-51`（worktree `.claude/worktrees/mermaid-51`）。下一步从 W1 开始。
+**Status**：调研与设计完成（2026-10-22）；W1 进行中（2026-10-23）。分支 `worktree-mermaid-51`（worktree `.claude/worktrees/mermaid-51`）。下一步从 W1 开始。
 
 ## 已决定事项（用户原话，摘自 issue #51 正文）
 > **决定（用户 2026-10-22）**：Mermaid 流程图要做，走方案 B——app 和终端版一起做。用户已同意为此引入第三方库 mermaid.js；按 AGENTS.md 铁律，动手前仍要在 `.claude/plans/` 里写一份 plan，把版本、体积、许可证、打包与更新方式写清楚。
@@ -15,7 +15,7 @@
 - 终端版：kitty / Ghostty 下 mermaid 代码块显示成图（复用 #60 的本地图片管线），复制得到 Mermaid 源码；图由同一 app 包里的 `Contents/MacOS/Peeky` 在后台画。
 
 ## 不做什么
-- 跨次运行的 PNG 缓存（每次打开都重画；见「待用户决定」）。
+- 跨次运行的 PNG 缓存（每次打开都重画；用户 2026-10-23 选定）。
 - 网络加载 mermaid.js、运行期 Node。
 - mermaid 的交互功能（点击回调、链接跳转、tooltip）。
 - 终端版不支持图片的终端（显示成代码块，与现状相同）。
@@ -79,5 +79,7 @@
 | W6 | 终端版：排版、reducer、运行时、退出清理 | 排版与 reducer test-first ≤ 8 例；找渲染程序 ≤ 4 例；tui-smoke + 录像解码验收（验收判据 6、7），无屏验证手法见 issue #51 正文 |
 | W7 | 文档：TECHSTACK（依赖、资源、体积、许可证、更新命令）、PATTERNS（app 与终端版的 Mermaid 约定）、PROJECT（功能清单）、DEVFLOW（更新命令、验收清单）；完成后删除本 plan、关 #51 | — |
 
-## 待用户决定
-- 是否要跨次运行的 PNG 缓存（放 `~/Library/Caches/<bundle id>/mermaid/`）：有了它，再次打开同一份文档时终端版的图立刻出现；没有它，每次打开都要等渲染进程（预计不到 1 秒，W2 实测后补数字）。默认不做。
+## 用户补充决定
+> 就按A，你直接开始做（2026-10-23）
+
+A = 终端版画好的图不跨次保存：每次打开都由渲染进程重画，PNG 只放在本次运行的临时目录里，退出时删掉。
