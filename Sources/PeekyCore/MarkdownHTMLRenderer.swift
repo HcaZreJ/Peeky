@@ -233,7 +233,7 @@ package enum MarkdownHTMLRenderer {
         """
 
     /// 逐个 `.peeky-mermaid` 容器取源码画图：成功时把 SVG 插在源码前面并藏起源码，失败时留着源码、
-    /// 追加一行错误首行。主题跟随系统明暗（浅色 default、深色 dark），明暗切换时全部重画。
+    /// 追加一行错误首行。配色跟随系统明暗（`MermaidDiagram.initializeOptionsJSON`），明暗切换时全部重画。
     private static let diagramScript = """
         (function(){
         var markReady;
@@ -241,7 +241,7 @@ package enum MarkdownHTMLRenderer {
         var darkScheme=window.matchMedia('(prefers-color-scheme: dark)');
         var counter=0;
         async function renderAll(){
-          mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:darkScheme.matches?'dark':'default'});
+          mermaid.initialize(darkScheme.matches?\(MermaidDiagram.initializeOptionsJSON(appearance: .dark)):\(MermaidDiagram.initializeOptionsJSON(appearance: .light)));
           for(const block of document.querySelectorAll('.peeky-mermaid')){
             const code=block.querySelector('pre code');
             if(!code)continue;

@@ -42,7 +42,7 @@ final class MermaidRenderProcess: NSObject, WKNavigationDelegate {
     /// 清掉上一张留下的临时节点，画一张图放进 #host，返回 SVG 的包围盒（CSS 像素）。
     private static let renderScript = """
         document.querySelectorAll('body > :not(#host)').forEach(function(e){e.remove();});
-        mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:theme});
+        mermaid.initialize(JSON.parse(options));
         const host=document.getElementById('host');
         host.innerHTML='';
         const result=await mermaid.render(id,source);
@@ -128,10 +128,10 @@ final class MermaidRenderProcess: NSObject, WKNavigationDelegate {
         guard let source = try? String(contentsOf: diagram.source, encoding: .utf8) else {
             throw RenderFailure(code: "source_unreadable", message: "读不了源码文件")
         }
-        let theme = job.appearance == .dark ? "dark" : "default"
+        let options = MermaidDiagram.initializeOptionsJSON(appearance: job.appearance)
         let value = try await webView.callAsyncJavaScript(
             Self.renderScript,
-            arguments: ["source": source, "theme": theme, "id": id],
+            arguments: ["source": source, "options": options, "id": id],
             contentWorld: .page
         )
         guard let numbers = value as? [NSNumber], numbers.count == 4 else {
