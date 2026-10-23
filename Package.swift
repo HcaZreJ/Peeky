@@ -96,6 +96,19 @@ let package = Package(
             dependencies: ["PeekyKit"],
             path: "Sources/Peeky"
         ),
+        // Mermaid diagrams → PNG with an offscreen WKWebView; the terminal UI
+        // runs it in the background (shipped in Peeky.app/Contents/Helpers).
+        .target(
+            name: "PeekyMermaid",
+            dependencies: ["PeekyCore"],
+            path: "Sources/PeekyMermaid",
+            swiftSettings: [.unsafeFlags(["-enable-testing"])]
+        ),
+        .executableTarget(
+            name: "peeky-mermaid",
+            dependencies: ["PeekyMermaid"],
+            path: "Sources/peeky-mermaid"
+        ),
         // Terminal UI: opens a file inside the current terminal split.
         .target(
             name: "PeekTUI",
@@ -113,7 +126,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "PeekyTests",
-            dependencies: ["PeekyKit", "PeekyCore", "PeekTUI"],
+            dependencies: ["PeekyKit", "PeekyCore", "PeekTUI", "PeekyMermaid"],
             path: "Tests",
             swiftSettings: testSwiftSettings,
             linkerSettings: testLinkerSettings

@@ -1,0 +1,3 @@
+import PeekyMermaid
+
+PeekyMermaidMain.run()

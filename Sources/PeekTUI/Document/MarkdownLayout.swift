@@ -72,6 +72,40 @@ package struct MarkdownRow: Equatable, Sendable {
     package var image: TerminalImage?
 }
 
+/// 画好的一张 Mermaid 图：PNG 路径与像素尺寸（画不出来的是 `PixelSize.unreadable`）。
+package struct MermaidImage: Equatable, Sendable {
+    package var path: String
+    package var size: PixelSize
+
+    package init(path: String, size: PixelSize) {
+        self.path = path
+        self.size = size
+    }
+}
+
+/// 文档里要画成图的一个 mermaid 代码块：`key` 由明暗与源码决定，同一份源码换了明暗要另画一张。
+package struct MarkdownDiagramSource: Equatable, Sendable {
+    package var key: String
+    package var code: String
+    package var appearance: PeekyPalette.Appearance
+
+    package init(key: String, code: String, appearance: PeekyPalette.Appearance) {
+        self.key = key
+        self.code = code
+        self.appearance = appearance
+    }
+
+    /// 「明暗 + 源码」的 FNV-1a 64 位散列（16 位十六进制），也用作 PNG 文件名。
+    package static func key(code: String, appearance: PeekyPalette.Appearance) -> String {
+        var hash: UInt64 = 0xCBF2_9CE4_8422_2325
+        for byte in "\(appearance == .dark ? "dark" : "light")|\(code)".utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01B3
+        }
+        return String(format: "%016llx", hash)
+    }
+}
+
 /// 排版时显示图片的条件，终端支持 kitty 图片协议的 Unicode 占位符时才有。
 package struct MarkdownImageContext: Equatable, Sendable {
     /// 一张图最多占几行。
@@ -85,12 +119,15 @@ package struct MarkdownImageContext: Equatable, Sendable {
     package var baseDirectory: URL?
     /// 顶层 H1 / H2 画成图（终端不支持放大文字时）
     package var headingImages: Bool
+    /// 已画好的 Mermaid 图，按 `MarkdownDiagramSource.key`；还没画好的按代码显示
+    package var diagrams: [String: MermaidImage]
 
-    package init(cell: PixelSize, sizes: [String: PixelSize] = [:], baseDirectory: URL?, headingImages: Bool = false) {
+    package init(cell: PixelSize, sizes: [String: PixelSize] = [:], baseDirectory: URL?, headingImages: Bool = false, diagrams: [String: MermaidImage] = [:]) {
         self.cell = cell
         self.sizes = sizes
         self.baseDirectory = baseDirectory
         self.headingImages = headingImages
+        self.diagrams = diagrams
     }
 }
 
@@ -125,6 +162,8 @@ package struct MarkdownRendering: Equatable, Sendable {
     package var imageContext: MarkdownImageContext?
     /// 文档里本地图片的绝对路径（按出现顺序、不重复），有图片条件时才收集；运行时据此读尺寸
     package var imageSources: [String] = []
+    /// 文档里的 mermaid 代码块（按出现顺序、按键不重复），有图片条件时才收集；运行时据此画图
+    package var diagramSources: [MarkdownDiagramSource] = []
 }
 
 extension MarkdownTheme {
@@ -202,7 +241,8 @@ package enum MarkdownLayout {
             appearance: theme.appearance,
             scaledHeadings: scaledHeadings,
             imageContext: images,
-            imageSources: builder.imageSources
+            imageSources: builder.imageSources,
+            diagramSources: builder.diagramSources
         )
     }
 
@@ -305,6 +345,8 @@ package enum MarkdownLayout {
         var images: MarkdownImageContext?
         /// 遇到的本地图片（绝对路径，不重复）
         var imageSources: [String] = []
+        /// 遇到的 mermaid 代码块（按键不重复）
+        var diagramSources: [MarkdownDiagramSource] = []
 
         init(theme: MarkdownTheme, codeTokens: [Int: [[HighlightedToken]]], lineOffset: Int) {
             self.theme = theme
@@ -386,19 +428,38 @@ package enum MarkdownLayout {
             guard let image = node as? Image, let source = image.source, let path = recordImage(source),
                   let size = images.sizes[path], !size.isEmpty
             else { return nil }
-            let cells = MarkdownLayout.imageCells(size, cell: images.cell, maxColumns: width, maxRows: MarkdownImageContext.maximumRows)
-            let terminalImage = TerminalImage(content: .file(path: path), columns: cells.columns, rows: cells.rows, cell: images.cell)
             let alt = image.children.compactMap { ($0 as? Text)?.string }.joined()
+            return imageLines(path: path, size: size, context: images, width: width, copyText: "[图片] " + (alt.isEmpty ? source : alt), link: target ?? source, sourceLine: line)
+        }
+
+        /// mermaid 代码块（有图片条件时）：记下要画的源码；图已画好时排成占位符行，复制得到 Mermaid 源码。
+        /// 还没画好、画不出来时返回 nil，按代码显示。
+        mutating func diagramLines(_ code: CodeBlock, width: Int, sourceLine line: Int) -> [Line]? {
+            guard let images, MermaidDiagram.isDiagram(language: code.language) else { return nil }
+            let text = MarkdownLayout.trimmedCode(code.code)
+            let key = MarkdownDiagramSource.key(code: text, appearance: theme.appearance)
+            if !diagramSources.contains(where: { $0.key == key }) {
+                diagramSources.append(MarkdownDiagramSource(key: key, code: text, appearance: theme.appearance))
+            }
+            guard let diagram = images.diagrams[key], !diagram.size.isEmpty else { return nil }
+            return imageLines(path: diagram.path, size: diagram.size, context: images, width: width, copyText: text, link: nil, sourceLine: line)
+        }
+
+        /// 一张图的占位符行：占格按 `imageCells`（不放大，不超过正文宽与 30 行）；第一行复制成 `copyText`
+        /// 并带链接，其余行是装饰。
+        func imageLines(path: String, size: PixelSize, context: MarkdownImageContext, width: Int, copyText: String, link: String?, sourceLine line: Int) -> [Line] {
+            let cells = MarkdownLayout.imageCells(size, cell: context.cell, maxColumns: width, maxRows: MarkdownImageContext.maximumRows)
+            let terminalImage = TerminalImage(content: .file(path: path), columns: cells.columns, rows: cells.rows, cell: context.cell)
             let style = CellStyle(foreground: ImagePlaceholder.color(for: terminalImage.id))
             return (0..<terminalImage.rows).map { row in
                 Line(
                     spans: [StyledSpan(
                         text: ImagePlaceholder.rowText(row: row, columns: terminalImage.columns),
                         style: style,
-                        copyText: row == 0 ? "[图片] " + (alt.isEmpty ? source : alt) : ""
+                        copyText: row == 0 ? copyText : ""
                     )],
                     sourceLine: line,
-                    links: row == 0 ? [target ?? source] : [],
+                    links: row == 0 ? link.map { [$0] } ?? [] : [],
                     image: terminalImage
                 )
             }
@@ -586,6 +647,7 @@ package enum MarkdownLayout {
             let index = codeBlockIndex
             codeBlockIndex += 1
             let firstLine = sourceLine(code) + 1
+            if let lines = diagramLines(code, width: width, sourceLine: firstLine) { return lines }
             let fill = LineFill(column: 0, style: CellStyle(background: theme.codeBlockBackground), toEdge: false)
             let tokens = theme.highlightsCode ? codeTokens[index] : nil
             let sourceLines = MarkdownLayout.trimmedCode(code.code).split(separator: "\n", omittingEmptySubsequences: false)

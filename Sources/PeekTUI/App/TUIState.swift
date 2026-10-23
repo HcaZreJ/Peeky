@@ -66,6 +66,10 @@ package struct OpenedDocument: Equatable, Sendable {
     package var imageSizes: [String: PixelSize] = [:]
     /// 已经请运行时去读尺寸的图片，免得重排时重复去读。
     package var requestedImages: Set<String> = []
+    /// 画好的 Mermaid 图，按 `MarkdownDiagramSource.key`。
+    package var diagramImages: [String: MermaidImage] = [:]
+    /// 已经请运行时去画的 Mermaid 图，免得重排时重复去画。
+    package var requestedDiagrams: Set<String> = []
 
     package init(
         header: DocumentHeader,

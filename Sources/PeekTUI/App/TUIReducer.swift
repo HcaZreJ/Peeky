@@ -28,6 +28,8 @@ package enum TUIEvent: Equatable, Sendable {
     case treeRootDiscovered(root: URL, repoRoot: URL?, file: URL)
     /// Markdown 里本地图片的像素尺寸（读不了的是 `PixelSize.unreadable`）
     case imagesProbed([String: PixelSize], generation: Int)
+    /// Mermaid 图画好了（画不出来的尺寸是 `PixelSize.unreadable`），按 `MarkdownDiagramSource.key`
+    case diagramsRendered([String: MermaidImage], generation: Int)
 }
 
 /// reducer 产出的副作用，由 `TUIRuntime` 执行。
@@ -73,6 +75,8 @@ package enum TUIEffect: Equatable, Sendable {
     case discoverTreeRoot(URL)
     /// 读本地图片的像素尺寸，结果以 `.imagesProbed` 送回
     case probeImages(paths: [String], generation: Int)
+    /// 请 app 包里的 Peeky 把 mermaid 源码画成 PNG，结果以 `.diagramsRendered` 送回
+    case renderDiagrams([MarkdownDiagramSource], generation: Int)
 }
 
 /// 纯函数：根据事件更新状态，返回要执行的副作用。
@@ -107,7 +111,7 @@ package enum TUIReducer {
             withLayout(&state) { viewport, layout, height in
                 viewport.moveCursor(to: document.line(forSourceLine: cursorSource), lineCount: layout.lineCount, height: height, rows: layout.rows)
             }
-            return rerunSearch(&state) + probeImagesIfNeeded(&state)
+            return rerunSearch(&state) + probeImagesIfNeeded(&state) + renderDiagramsIfNeeded(&state)
         case let .jsonIndexed(view, generation):
             guard generation == state.generation, case var .loaded(document) = state.document else { return [] }
             document.json = view
@@ -154,6 +158,11 @@ package enum TUIReducer {
         case let .imagesProbed(sizes, generation):
             guard generation == state.generation, case var .loaded(document) = state.document else { return [] }
             document.imageSizes.merge(sizes) { _, new in new }
+            state.document = .loaded(document)
+            return relayoutMarkdownIfNeeded(state)
+        case let .diagramsRendered(images, generation):
+            guard generation == state.generation, case var .loaded(document) = state.document else { return [] }
+            document.diagramImages.merge(images) { _, new in new }
             state.document = .loaded(document)
             return relayoutMarkdownIfNeeded(state)
         case let .searchResults(matches, id, generation, isComplete, isTruncated):
@@ -240,17 +249,17 @@ package enum TUIReducer {
     /// kitty 图片协议探测用的图片编号（`a=q` 不真的存图）。
     static let graphicsProbeID = 31
 
-    /// 排版时显示图片的条件：终端能显示图片时才有，带上这个文档已读到的图片尺寸；终端不支持放大文字时
-    /// H1 / H2 画成图。
+    /// 排版时显示图片的条件：终端能显示图片时才有，带上这个文档已读到的图片尺寸与画好的 Mermaid 图；
+    /// 终端不支持放大文字时 H1 / H2 画成图。
     static func imageContext(_ state: TUIState, document: OpenedDocument) -> MarkdownImageContext? {
         guard state.supportsImages, let cell = state.cellPixelSize else { return nil }
-        return MarkdownImageContext(cell: cell, sizes: document.imageSizes, baseDirectory: document.baseDirectory, headingImages: !state.supportsTextSizing)
+        return MarkdownImageContext(cell: cell, sizes: document.imageSizes, baseDirectory: document.baseDirectory, headingImages: !state.supportsTextSizing, diagrams: document.diagramImages)
     }
 
-    /// 读入时的图片条件（文档还没读进来，图片尺寸沿用 `sizes`）。
-    static func imageContext(_ state: TUIState, file: URL, sizes: [String: PixelSize] = [:]) -> MarkdownImageContext? {
+    /// 读入时的图片条件（文档还没读进来，图片尺寸与 Mermaid 图沿用 `sizes` / `diagrams`）。
+    static func imageContext(_ state: TUIState, file: URL, sizes: [String: PixelSize] = [:], diagrams: [String: MermaidImage] = [:]) -> MarkdownImageContext? {
         guard state.supportsImages, let cell = state.cellPixelSize else { return nil }
-        return MarkdownImageContext(cell: cell, sizes: sizes, baseDirectory: file.deletingLastPathComponent(), headingImages: !state.supportsTextSizing)
+        return MarkdownImageContext(cell: cell, sizes: sizes, baseDirectory: file.deletingLastPathComponent(), headingImages: !state.supportsTextSizing, diagrams: diagrams)
     }
 
     /// 排版里出现了还没读尺寸的本地图片：请运行时去读。
@@ -261,6 +270,16 @@ package enum TUIReducer {
         document.requestedImages.formUnion(missing)
         state.document = .loaded(document)
         return [.probeImages(paths: missing, generation: state.generation)]
+    }
+
+    /// 排版里出现了还没画的 Mermaid 图：请运行时去画（明暗变了键也变，换明暗后自然重画）。
+    static func renderDiagramsIfNeeded(_ state: inout TUIState) -> [TUIEffect] {
+        guard state.supportsImages, case var .loaded(document) = state.document, let rendering = document.markdown else { return [] }
+        let missing = rendering.diagramSources.filter { document.diagramImages[$0.key] == nil && !document.requestedDiagrams.contains($0.key) }
+        guard !missing.isEmpty else { return [] }
+        document.requestedDiagrams.formUnion(missing.map(\.key))
+        state.document = .loaded(document)
+        return [.renderDiagrams(missing, generation: state.generation)]
     }
 
     /// 终端名、格子像素尺寸、图片协议探测的回复到了：能显示图片与否变了就重排 Markdown。
@@ -290,8 +309,10 @@ package enum TUIReducer {
     static func reload(_ state: inout TUIState) -> [TUIEffect] {
         guard let file = state.activeFile else { return [] }
         var imageSizes: [String: PixelSize] = [:]
+        var diagramImages: [String: MermaidImage] = [:]
         if case let .loaded(document) = state.document {
             imageSizes = document.imageSizes
+            diagramImages = document.diagramImages
             state.reloadAnchor = ReloadAnchor(
                 topSourceLine: document.sourceLine(forLine: state.viewport.top.line),
                 cursorSourceLine: document.sourceLine(forLine: state.viewport.cursor),
@@ -300,7 +321,7 @@ package enum TUIReducer {
             )
         }
         state.advanceGeneration()
-        return [.load(url: file, generation: state.generation, width: state.contentColumns, isReload: true, appearance: state.appearance, scaledHeadings: state.supportsTextSizing, images: imageContext(state, file: file, sizes: imageSizes))]
+        return [.load(url: file, generation: state.generation, width: state.contentColumns, isReload: true, appearance: state.appearance, scaledHeadings: state.supportsTextSizing, images: imageContext(state, file: file, sizes: imageSizes, diagrams: diagramImages))]
     }
 
     private static func documentLoaded(_ document: OpenedDocument, state: inout TUIState) -> [TUIEffect] {
@@ -324,7 +345,7 @@ package enum TUIReducer {
             }
         }
         // 读文件期间明暗变了时按新明暗重排；有搜索词时在新内容里重搜
-        let relayout = relayoutMarkdownIfNeeded(state) + rerunSearch(&state) + probeImagesIfNeeded(&state)
+        let relayout = relayoutMarkdownIfNeeded(state) + rerunSearch(&state) + probeImagesIfNeeded(&state) + renderDiagramsIfNeeded(&state)
         switch document.presentation {
         case let .source(language):
             return [.startHighlight(generation: state.generation, text: document.store.text, language: language)]
