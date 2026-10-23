@@ -28,12 +28,14 @@ package enum TextFileLoader {
     private static let maxPreviewBytes = PreviewBudget.maxPreviewBytes
 
     package static func load(url: URL) throws -> LoadedText {
-        let values = try url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey])
-        if values.isDirectory == true {
+        // 直接读文件属性：`URL.resourceValues` 把值缓存在 URL 实例上，同一个 URL 重读改写过的文件时
+        // 会拿到上一次的大小。
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        if attributes[.type] as? FileAttributeType == .typeDirectory {
             throw TextLoadError.directory(url)
         }
 
-        let totalBytes = Int64(values.fileSize ?? 0)
+        let totalBytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
         let data: Data
         let isTruncated: Bool
 

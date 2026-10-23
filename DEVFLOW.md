@@ -40,7 +40,6 @@
 ## 测试策略（Test-First，双层）
 - 叶子纯函数模块：`Tests/visible/` + `Tests/hidden/`（Swift Testing；suite 命名 `Visible_<unit>` / `Hidden_<unit>` 供 `--filter` 精确匹配；同 target 内文件 basename 必须唯一，命名 `<unit>Visible.test.swift` / `<unit>Hidden.test.swift`）。`--filter` 匹配的是 Swift 里的类型名，测试结构体本身也要命名为 `Visible_<unit>`；`--filter` 不支持用 `|` 同时匹配多个套件，要逐个运行。
 - 测试是独立 executable `PeekyTests`（`Tests/entry.swift` 经 `Testing.__swiftPMEntryPoint()` 进入），测试文件同时 `@testable import PeekyKit` 与 `@testable import PeekyCore`，走 debug 构建。
-- 开真实窗口的界面测试（`Visible_headerMeta`、`Visible_headerLayout` 等）在默认的并行运行下偶发失败；全量验收用 `./.build/out/Products/Debug/PeekyTests --no-parallel`。
 - hidden 运行器：`scripts/run-hidden-tests.sh <unit>`，仅输出 `PASSED: X/Y`。
 - Stub 阶段用 **degenerate 返回值**（空集合 / nil / 空串），测试以断言失败呈现失败状态（"全部 FAIL 且非编译错误"的信号）。测试内对 stub 可能返回的集合做下标访问必须经过 `try #require` 或安全下标；直接使用 `[0]` 会 trap 中止整个共享 PeekyTests 进程，其余用例都无法运行。
 

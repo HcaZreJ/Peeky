@@ -10,14 +10,18 @@ private struct FileStamp: Equatable {
 
     /// 文件不存在或属性读不到时为 nil。nil 与任何有值的 stamp 不相等，于是「文件被删了」
     /// 与「文件又回来了」都会被判成变化。
+    ///
+    /// 直接读文件属性：`URL.resourceValues` 把值缓存在 URL 实例上，runloop 转过一轮才清，
+    /// 改写之后紧跟着的那次对账会拿到打开时的旧值，这次改写就漏掉了。
     static func of(_ url: URL) -> FileStamp? {
         guard
-            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]),
-            let mtime = values.contentModificationDate
+            let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+            let size = attributes[.size] as? NSNumber,
+            let mtime = attributes[.modificationDate] as? Date
         else {
             return nil
         }
-        return FileStamp(size: Int64(values.fileSize ?? 0), mtime: mtime)
+        return FileStamp(size: size.int64Value, mtime: mtime)
     }
 }
 
