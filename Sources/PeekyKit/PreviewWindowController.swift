@@ -430,6 +430,21 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     private let markdownWebView = WKWebView()
     /// github-markdown.css 内容，首次访问时从资源包加载一次并缓存。
     private lazy var githubMarkdownCSS = MarkdownHTMLRenderer.loadGithubMarkdownCSS()
+    /// 选区变化监听的注入脚本（每次载入都带上）。
+    private let selectionUserScript = WKUserScript(
+        source: PreviewWindowController.webViewSelectionScript,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true
+    )
+    /// mermaid.js 加画图调用的注入脚本：文档含 Mermaid 块时才带上，首次用到时读资源（找不到为 nil，
+    /// 图降级为代码块）。走注入脚本而不内联进 HTML，库里的 `<!--` 之类不会被 HTML 解析截断。
+    private lazy var mermaidUserScript: WKUserScript? = MermaidDiagram.loadLibrary().map { library in
+        WKUserScript(
+            source: library + "\n;window.peekyRenderDiagrams&&window.peekyRenderDiagrams();",
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true
+        )
+    }
     /// 当前是否处于 markdown WebView 呈现态（决定大纲点击走 JS 滚动还是原生滚动）。
     private var isMarkdownWebActive = false
     /// markdown WebView 场景下选区首行的源行号 heuristic 结果（见 handleWebViewSelectionPayload）；
@@ -1378,13 +1393,18 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         markdownWebView.navigationDelegate = self
         contentView.addSubview(markdownWebView)
 
-        let script = WKUserScript(
-            source: Self.webViewSelectionScript,
-            injectionTime: .atDocumentEnd,
-            forMainFrameOnly: true
-        )
         markdownWebView.configuration.userContentController.add(self, name: "peekySelection")
-        markdownWebView.configuration.userContentController.addUserScript(script)
+        markdownWebView.configuration.userContentController.addUserScript(selectionUserScript)
+    }
+
+    /// 本次载入要注入的脚本：选区监听总是带上，画 Mermaid 图时再加 mermaid.js。
+    private func installMarkdownUserScripts(rendersDiagrams: Bool) {
+        let controller = markdownWebView.configuration.userContentController
+        controller.removeAllUserScripts()
+        controller.addUserScript(selectionUserScript)
+        if rendersDiagrams, let mermaidUserScript {
+            controller.addUserScript(mermaidUserScript)
+        }
     }
 
     /// 注入 markdown WebView 的选区变化监听：非空选区时回传首行 clientRect（CSS 像素）
@@ -2028,7 +2048,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         let rendered = MarkdownHTMLRenderer.renderWithOutline(document.text)
         currentMarkdownOutline = rendered.outline
         pendingMarkdownScrollLine = targetLine
-        let html = MarkdownHTMLRenderer.documentHTML(bodyHTML: rendered.html, css: githubMarkdownCSS)
+        let rendersDiagrams = rendered.hasMermaid && mermaidUserScript != nil
+        installMarkdownUserScripts(rendersDiagrams: rendersDiagrams)
+        let html = MarkdownHTMLRenderer.documentHTML(bodyHTML: rendered.html, css: githubMarkdownCSS, rendersDiagrams: rendersDiagrams)
         markdownWebView.loadHTMLString(html, baseURL: nil)
 
         rebuildMarkdownOutline(rendered.outline)
@@ -2090,7 +2112,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         if let scrollY = pendingMarkdownScrollY {
             pendingMarkdownScrollY = nil
             pendingMarkdownScrollLine = nil
-            webView.evaluateJavaScript("window.scrollTo(0, \(scrollY))")
+            webView.evaluateJavaScript("peekyScrollTo(\(scrollY))")
             return
         }
 

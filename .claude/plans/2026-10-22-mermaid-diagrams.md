@@ -1,6 +1,6 @@
 # Feature: Markdown 里的 Mermaid 图画成图（app 与终端版，issue #51）
 
-**Status**：调研与设计完成（2026-10-22）；W1 进行中（2026-10-23）。分支 `worktree-mermaid-51`（worktree `.claude/worktrees/mermaid-51`）。下一步从 W1 开始。
+**Status**：W1 完成（18b4f64）；W2 spike 通过——不上屏的 `NSWindow` + `WKWebView`（`drawsBackground = false`）+ `callAsyncJavaScript` 等 `mermaid.render` + `takeSnapshot`，在 backing 2.0 下直接得到 2 倍像素、四角全透明的 PNG（5 节点中文流程图 732×972 px）；进程总耗时冷启动 1.8 s（新二进制首次运行）、之后 0.42 s。LaunchServices 登记问题留到 W5 用真实 app 包验证。W3、W4 完成：app 实测浅色下流程图 / 时序图画出、语法错误块留源码并显示「Parse error on line 3」、`文件:23` 打开后跳到标题；深色与明暗切换用离屏 WebView 设 darkAqua 验证（节点底色 rgb(236,236,255) → rgb(31,32,32)），真实系统明暗切换留给用户实测。W5 进行中。分支 `worktree-mermaid-51`（worktree `.claude/worktrees/mermaid-51`）。
 
 ## 已决定事项（用户原话，摘自 issue #51 正文）
 > **决定（用户 2026-10-22）**：Mermaid 流程图要做，走方案 B——app 和终端版一起做。用户已同意为此引入第三方库 mermaid.js；按 AGENTS.md 铁律，动手前仍要在 `.claude/plans/` 里写一份 plan，把版本、体积、许可证、打包与更新方式写清楚。
@@ -59,7 +59,6 @@
 ### 渲染模式（PeekyKit，`Peeky --render-mermaid`）
 - 命令行：`Peeky --render-mermaid --appearance dark|light <源码文件> <输出.png> [<源码文件> <输出.png> …]`。参数解析写成纯函数（`MermaidRenderJob.parse(arguments) -> Result<MermaidRenderJob, …>`），`PeekyMain.run()` 开头判断，命中就走渲染模式、不建 `AppDelegate`。
 - 进程：`NSApplication.shared` + `setActivationPolicy(.prohibited)`（不出 Dock 图标）；一个不上屏的 `NSWindow` 承载 `WKWebView`（`drawsBackground = false`，透明底）；页面只含 mermaid.js 与渲染函数。逐个渲染：JS 返回 SVG 的包围盒 → 设 WebView 尺寸 → `takeSnapshot`（2 倍）→ PNG 写到输出路径。任一块失败不写它的 PNG、继续下一块，最后有失败则退出码 1。总超时 20 秒。
-- W2 的第一步是 spike：确认离屏 `takeSnapshot` 在锁屏 / 无屏幕权限下能出像素、底色透明；不行就改用 `createPDF(configuration:)` 加 CoreGraphics 光栅化。
 - 同时确认 LaunchServices 是否把这个进程当成正在运行的 Peeky（`lsappinfo list` 里查）。若是，渲染期间用户恰好 `peek --app` 时打开请求可能送到它这里；记录结论，必要时把渲染进程改成不登记为 app 的方式。
 
 ### 终端版（PeekTUI）

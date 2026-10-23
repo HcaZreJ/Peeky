@@ -134,4 +134,58 @@ struct Visible_markdownHTMLRenderer {
         #expect(doc.contains("class=\"markdown-body\""))
         #expect(doc.contains("<h1 id=\"heading-0\">Hi</h1>"))
     }
+
+    // MARK: - Mermaid
+
+    @Test("mermaid 代码块包进 peeky-mermaid 容器，源码转义后留在代码块里，结果标出含图")
+    func test_markdownHTMLRenderer_mermaidBlockWrappedInContainer() {
+        let result = MarkdownHTMLRenderer.renderWithOutline("```mermaid\nflowchart LR\n  A --> B<C>\n```")
+
+        #expect(result.html == "<div class=\"peeky-mermaid\"><pre><code class=\"language-mermaid\">flowchart LR\n  A --&gt; B&lt;C&gt;</code></pre></div>")
+        #expect(result.hasMermaid)
+    }
+
+    @Test("语言名不分大小写，围栏后的附加说明不影响识别")
+    func test_markdownHTMLRenderer_mermaidLanguageCaseInsensitive() {
+        let result = MarkdownHTMLRenderer.renderWithOutline("```Mermaid title=\"流程\"\ngraph TD\n```")
+
+        #expect(result.html.hasPrefix("<div class=\"peeky-mermaid\">"))
+        #expect(result.hasMermaid)
+    }
+
+    @Test("其它语言的代码块照旧输出，结果标出不含图")
+    func test_markdownHTMLRenderer_otherCodeBlocksUnchanged() {
+        let result = MarkdownHTMLRenderer.renderWithOutline("```swift\nlet a = 1\n```\n\n```\nplain\n```")
+
+        #expect(result.html == "<pre><code class=\"language-swift\">let a = 1</code></pre><pre><code>plain</code></pre>")
+        #expect(!result.hasMermaid)
+    }
+
+    @Test("列表里的 mermaid 块同样包进容器")
+    func test_markdownHTMLRenderer_nestedMermaidBlock() {
+        let result = MarkdownHTMLRenderer.renderWithOutline("- item\n\n  ```mermaid\n  graph TD\n  ```")
+
+        #expect(result.html.contains("<div class=\"peeky-mermaid\"><pre><code class=\"language-mermaid\">graph TD</code></pre></div>"))
+        #expect(result.hasMermaid)
+    }
+
+    @Test("画图时整页带上画图函数与藏起源码的样式；不画图时没有画图函数，但滚动等待的 Promise 照样定义")
+    func test_markdownHTMLRenderer_documentHTMLDiagramScript() {
+        let withDiagrams = MarkdownHTMLRenderer.documentHTML(bodyHTML: "", css: "", rendersDiagrams: true)
+        #expect(withDiagrams.contains("window.peekyRenderDiagrams"))
+        #expect(withDiagrams.contains(".peeky-mermaid-rendered>pre{display:none}"))
+        #expect(withDiagrams.contains("window.peekyDiagramsReady"))
+
+        let plain = MarkdownHTMLRenderer.documentHTML(bodyHTML: "", css: "")
+        #expect(!plain.contains("window.peekyRenderDiagrams"))
+        #expect(plain.contains("window.peekyDiagramsReady=Promise.resolve()"))
+    }
+
+    @Test("跳到标题与恢复滚动位置都等图画完之后再做")
+    func test_markdownHTMLRenderer_scrollWaitsForDiagrams() {
+        let doc = MarkdownHTMLRenderer.documentHTML(bodyHTML: "", css: "")
+
+        #expect(doc.contains("function scrollToHeading(n){window.peekyDiagramsReady.then("))
+        #expect(doc.contains("function peekyScrollTo(y){window.peekyDiagramsReady.then("))
+    }
 }

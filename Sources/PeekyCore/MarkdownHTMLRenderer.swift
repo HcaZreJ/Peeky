@@ -12,14 +12,14 @@ package enum MarkdownHTMLRenderer {
         renderWithOutline(markdown).html
     }
 
-    /// GFM markdown → (内层 HTML, 标题大纲)。h1–h4 标题按文档顺序赋 `id="heading-N"`，
-    /// 序号 N 与 `outline` 数组下标一致，供大纲项 → `#heading-N` 跳转。
-    package static func renderWithOutline(_ markdown: String) -> (html: String, outline: [MarkdownOutlineItem]) {
+    /// GFM markdown → (内层 HTML, 标题大纲, 是否含 Mermaid 图)。h1–h4 标题按文档顺序赋
+    /// `id="heading-N"`，序号 N 与 `outline` 数组下标一致，供大纲项 → `#heading-N` 跳转。
+    package static func renderWithOutline(_ markdown: String) -> (html: String, outline: [MarkdownOutlineItem], hasMermaid: Bool) {
         let extracted = extractFrontmatter(markdown)
         let document = Document(parsing: extracted.body, options: [.disableSmartOpts])
         let visitor = MarkdownHTMLVisitor()
         let bodyHTML = document.children.map { visitor.visit($0) }.joined()
-        return (extracted.html + bodyHTML, visitor.outline)
+        return (extracted.html + bodyHTML, visitor.outline, visitor.hasMermaid)
     }
 
     /// 顶部 YAML frontmatter (`---\n…\n---`) 剥离：命中则解析为 `key → 值` 序列
@@ -174,7 +174,12 @@ package enum MarkdownHTMLRenderer {
     }
 
     /// 组装完整 HTML 文档：内嵌 css + 包装样式 + `.markdown-body` 容器 + 极简滚动 JS。
-    package static func documentHTML(bodyHTML: String, css: String) -> String {
+    ///
+    /// `rendersDiagrams` 为 true 时加上画 Mermaid 图的函数 `peekyRenderDiagrams`：mermaid.js 本身
+    /// 由 WebView 以注入脚本加载（不经 HTML 解析，库里的 `<!--` 之类不会截断页面），加载后调用
+    /// 这个函数。`peekyDiagramsReady` 在图全部画完后兑现（不画图时一开始就兑现），跳到标题与
+    /// 恢复滚动位置都排在它后面，免得图把内容撑高后位置跑偏。
+    package static func documentHTML(bodyHTML: String, css: String, rendersDiagrams: Bool = false) -> String {
         """
         <!doctype html>
         <html>
@@ -208,13 +213,63 @@ package enum MarkdownHTMLRenderer {
           .markdown-body .peeky-frontmatter .peeky-fm-colon,
           .markdown-body .peeky-frontmatter .peeky-fm-dash{color:#8b949e}
         }
+        \(rendersDiagrams ? diagramStyle : "")
         </style>
         </head>
         <body><article class="markdown-body">\(bodyHTML)</article></body>
-        <script>function scrollToHeading(n){var e=document.getElementById('heading-'+n);if(e)e.scrollIntoView();}</script>
+        <script>\(rendersDiagrams ? diagramScript : "window.peekyDiagramsReady=Promise.resolve();")
+        function scrollToHeading(n){window.peekyDiagramsReady.then(function(){var e=document.getElementById('heading-'+n);if(e)e.scrollIntoView();});}
+        function peekyScrollTo(y){window.peekyDiagramsReady.then(function(){window.scrollTo(0,y);});}</script>
         </html>
         """
     }
+
+    /// Mermaid 图的样式：画好后藏起源码，图居中、过宽时横向滚动；画不出来时源码下面一行红字说明原因。
+    private static let diagramStyle = """
+        .markdown-body .peeky-mermaid-rendered>pre{display:none}
+        .markdown-body .peeky-mermaid-diagram{margin:0 0 16px;text-align:center;overflow-x:auto}
+        .markdown-body .peeky-mermaid-error{margin:-8px 0 16px;font-size:85%;color:#d1242f}
+        @media (prefers-color-scheme: dark){.markdown-body .peeky-mermaid-error{color:#f85149}}
+        """
+
+    /// 逐个 `.peeky-mermaid` 容器取源码画图：成功时把 SVG 插在源码前面并藏起源码，失败时留着源码、
+    /// 追加一行错误首行。主题跟随系统明暗（浅色 default、深色 dark），明暗切换时全部重画。
+    private static let diagramScript = """
+        (function(){
+        var markReady;
+        window.peekyDiagramsReady=new Promise(function(resolve){markReady=resolve;});
+        var darkScheme=window.matchMedia('(prefers-color-scheme: dark)');
+        var counter=0;
+        async function renderAll(){
+          mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:darkScheme.matches?'dark':'default'});
+          for(const block of document.querySelectorAll('.peeky-mermaid')){
+            const code=block.querySelector('pre code');
+            if(!code)continue;
+            block.querySelectorAll('.peeky-mermaid-diagram,.peeky-mermaid-error').forEach(function(e){e.remove();});
+            block.classList.remove('peeky-mermaid-rendered');
+            const id='peeky-mermaid-'+(counter++);
+            try{
+              const result=await mermaid.render(id,code.textContent);
+              const diagram=document.createElement('div');
+              diagram.className='peeky-mermaid-diagram';
+              diagram.innerHTML=result.svg;
+              block.insertBefore(diagram,block.firstChild);
+              block.classList.add('peeky-mermaid-rendered');
+            }catch(error){
+              [id,'d'+id].forEach(function(leftover){var e=document.getElementById(leftover);if(e)e.remove();});
+              const note=document.createElement('p');
+              note.className='peeky-mermaid-error';
+              note.textContent='Mermaid 图画不出来：'+String((error&&error.message)||error).split('\\n')[0].replace(/:\\s*$/,'');
+              block.appendChild(note);
+            }
+          }
+        }
+        window.peekyRenderDiagrams=function(){
+          renderAll().finally(function(){markReady();});
+          darkScheme.addEventListener('change',function(){renderAll();});
+        };
+        })();
+        """
 
     /// 从 PeekyCore 资源包读 github-markdown.css（寻径见 `CoreResources`）；
     /// 找不到返回空串（样式降级不崩）。
@@ -281,6 +336,7 @@ private final class MarkdownHTMLVisitor: MarkupVisitor {
     typealias Result = String
 
     private(set) var outline: [MarkdownOutlineItem] = []
+    private(set) var hasMermaid = false
     private var headingCount = 0
     private var linkDepth = 0
 
@@ -337,6 +393,10 @@ private final class MarkdownHTMLVisitor: MarkupVisitor {
             code.removeLast()
         }
         let escaped = MarkdownHTMLRenderer.escapeText(code)
+        if MermaidDiagram.isDiagram(language: codeBlock.language) {
+            hasMermaid = true
+            return "<div class=\"peeky-mermaid\"><pre><code class=\"language-mermaid\">\(escaped)</code></pre></div>"
+        }
         if let language = codeBlock.language, !language.isEmpty {
             return "<pre><code class=\"language-\(language)\">\(escaped)</code></pre>"
         }
