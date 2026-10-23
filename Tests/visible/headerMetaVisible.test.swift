@@ -78,21 +78,22 @@ struct Visible_headerMeta {
         #expect(try headerMetaText(in: window).hasPrefix(LastModifiedText.format(modifiedAt) + "  |  "))
     }
 
-    @Test("文件在磁盘上被改写后，从磁盘刷新一次，顶栏换成新的更改时间")
+    @Test("文件在磁盘上被改写后，从磁盘刷新一次，顶栏换成新的更改时间与大小")
     func metaFollowsDiskRewrite() throws {
         let url = try makeFixtureFile(named: "script.py", modifiedAt: modifiedAt)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let (controller, window) = try openInWindow(url)
 
+        // 改写与刷新之间不转 runloop：打开时读过的文件属性若还留在 URL 上，刷新就会拿到旧值。
         let rewrittenAt = modifiedAt.addingTimeInterval(3_725)
-        try "print('rewritten')\n".write(to: url, atomically: true, encoding: .utf8)
+        let rewritten = "print('rewritten')\n"
+        try rewritten.write(to: url, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.modificationDate: rewrittenAt], ofItemAtPath: url.path)
-        // URL 的文件属性缓存到 runloop 转过一轮才清；真实 app 里改写与刷新总隔着几轮，
-        // 测试里不转一轮，刷新读到的还是打开时缓存的那个修改时间。
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         controller.refreshFromDisk()
 
-        #expect(try headerMetaText(in: window).hasPrefix(LastModifiedText.format(rewrittenAt) + "  |  "))
+        let meta = try headerMetaText(in: window)
+        #expect(meta.hasPrefix(LastModifiedText.format(rewrittenAt) + "  |  "))
+        #expect(meta.contains(ByteCountFormatter.string(fromByteCount: Int64(rewritten.utf8.count), countStyle: .file)))
     }
 
     @Test("副标题放不下时只省略自己：窄窗口里按钮组仍贴着窗口右缘")
