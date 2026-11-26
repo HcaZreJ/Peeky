@@ -38,6 +38,12 @@ public enum PeekyPalette {
         case gutterDisclosure
         /// 侧栏文件树的缩进导轨：非活动列。活动列复用 `.gutterDisclosure`。
         case treeIndentGuide
+        /// ⌘F 查找（代码视图，画在文字下面，字色不变）：全部匹配的底色、当前匹配的底色，
+        /// 以及当前匹配内侧的描边（只有深色有：Dark Modern 的字符串是橙色，当前匹配只能用深焦橙底保住
+        /// 语法色的可读性，靠一圈亮橙描边从全部匹配里跳出来；浅色不描边，表里没有这一项）。
+        case findMatchBackground
+        case findCurrentMatchBackground
+        case findCurrentMatchBorder
     }
 
     /// sRGB 分量，0–255。
@@ -79,6 +85,9 @@ public enum PeekyPalette {
         .statusBarText: "#CCCCCC",
         .gutterDisclosure: "#A0A0A0",
         .treeIndentGuide: "#585858",
+        .findMatchBackground: "#BB800966",
+        .findCurrentMatchBackground: "#7A1D00",
+        .findCurrentMatchBorder: "#F0883E",
     ]
 
     /// light：GitHub Light
@@ -103,6 +112,8 @@ public enum PeekyPalette {
         .statusBarText: "#424A53",
         .gutterDisclosure: "#656D76",
         .treeIndentGuide: "#A9A9A9",
+        .findMatchBackground: "#FFCC0080",
+        .findCurrentMatchBackground: "#FFAA66",
     ]
 
     // MARK: - API

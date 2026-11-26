@@ -346,6 +346,14 @@ final class DropTextView: NSTextView {
             needsDisplay = true
         }
     }
+    /// ⌘F 查找的高亮：全部匹配一层、当前匹配一层，画在文字下面（不动文字属性，
+    /// JSON 可见区着色每次滚动重设临时属性也冲不掉它）。nil 时不画。
+    var findHighlights: FindHighlights? {
+        didSet {
+            guard findHighlights != oldValue else { return }
+            needsDisplay = true
+        }
+    }
 
     convenience init() {
         // macOS 15+ / Tahoe(26) NSTextView 默认走 TextKit2；gutter (PreviewGutterView) 与
@@ -416,8 +424,62 @@ final class DropTextView: NSTextView {
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
-        guard let foldOverlay else { return }
-        drawIndentGuides(using: foldOverlay)
+        if let foldOverlay {
+            drawIndentGuides(using: foldOverlay)
+        }
+        if let findHighlights {
+            drawFindHighlights(findHighlights, in: rect)
+        }
+    }
+
+    /// 只画落在这次重绘区域里的匹配：按字符区间二分挑出来，逐个取外接矩形填圆角底。
+    /// 颜色按本视图的外观取（源码视图钉在深色，JSON 跟随系统）。
+    ///
+    /// 矩形收到字形高度：行片段含段落行距（垫在下方），去掉行距那一截再整体上提 1pt，色块上下各比字形
+    /// 多出约 1pt，上下相邻两行的匹配之间留一条缝，和 Markdown 里 `::highlight` 的高度一致。
+    private func drawFindHighlights(_ highlights: FindHighlights, in rect: NSRect) {
+        guard !highlights.ranges.isEmpty, let layoutManager, let textContainer else { return }
+
+        let origin = textContainerOrigin
+        let containerRect = rect.offsetBy(dx: -origin.x, dy: -origin.y)
+        let glyphRange = layoutManager.glyphRange(forBoundingRectWithoutAdditionalLayout: containerRect, in: textContainer)
+        guard glyphRange.length > 0 else { return }
+        let characterRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+        let visible = TextSearch.indices(intersecting: characterRange, in: highlights.ranges)
+        guard !visible.isEmpty else { return }
+
+        let appearance = PeekyTheme.resolveAppearance(effectiveAppearance)
+        let matchColor = PeekyTheme.color(.findMatchBackground, appearance: appearance)
+        let currentColor = PeekyTheme.color(.findCurrentMatchBackground, appearance: appearance)
+        let currentBorder = PeekyPalette.hex(.findCurrentMatchBorder, appearance: appearance)
+            .map { _ in PeekyTheme.color(.findCurrentMatchBorder, appearance: appearance) }
+        let noSelection = NSRange(location: NSNotFound, length: 0)
+
+        for index in visible {
+            let range = highlights.ranges[index]
+            let isCurrent = index == highlights.currentIndex
+            let lineSpacing = (textStorage?.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle)?.lineSpacing ?? 0
+            let matchGlyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            layoutManager.enumerateEnclosingRects(
+                forGlyphRange: matchGlyphs,
+                withinSelectedGlyphRange: noSelection,
+                in: textContainer
+            ) { enclosingRect, _ in
+                var box = enclosingRect.offsetBy(dx: origin.x, dy: origin.y).insetBy(dx: -1.5, dy: 0)
+                box.size.height = max(0, box.height - lineSpacing)
+                box.origin.y -= 1
+                box.size.height += 1
+                (isCurrent ? currentColor : matchColor).setFill()
+                NSBezierPath(roundedRect: box, xRadius: 3, yRadius: 3).fill()
+                if isCurrent, let currentBorder {
+                    // 描边画在色块内侧 0.75pt，外缘与色块外缘重合，不压到相邻字形。
+                    let border = NSBezierPath(roundedRect: box.insetBy(dx: 0.75, dy: 0.75), xRadius: 2.25, yRadius: 2.25)
+                    border.lineWidth = 1.5
+                    currentBorder.setStroke()
+                    border.stroke()
+                }
+            }
+        }
     }
 
     override func selectionRange(forProposedRange proposedCharRange: NSRange, granularity: NSSelectionGranularity) -> NSRange {
