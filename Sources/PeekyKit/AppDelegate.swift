@@ -144,6 +144,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         editMenu.addItem(copyRelativePathItem)
         copyRelativePathMenuItem = copyRelativePathItem
 
+        // Edit ▸ Find 子菜单：项名与快捷键照 macOS 惯例（TextEdit / Safari 同款）。
+        editMenu.addItem(.separator())
+        let findMenuItem = NSMenuItem(title: "Find", action: nil, keyEquivalent: "")
+        let findMenu = NSMenu(title: "Find")
+        findMenuItem.submenu = findMenu
+        editMenu.addItem(findMenuItem)
+        let findItems: [(String, Selector, String, NSEvent.ModifierFlags)] = [
+            ("Find…", #selector(findAction(_:)), "f", [.command]),
+            ("Find Next", #selector(findNextAction(_:)), "g", [.command]),
+            ("Find Previous", #selector(findPreviousAction(_:)), "g", [.command, .shift]),
+            ("Use Selection for Find", #selector(useSelectionForFindAction(_:)), "e", [.command])
+        ]
+        for (title, action, key, modifiers) in findItems {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            item.target = self
+            findMenu.addItem(item)
+        }
+
         editMenu.delegate = self
         self.editMenu = editMenu
 
@@ -200,6 +219,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             return activeWindowController()?.hasFileTreeRoot == true
         }
 
+        let findActions: Set<Selector> = [
+            #selector(findAction(_:)),
+            #selector(findNextAction(_:)),
+            #selector(findPreviousAction(_:)),
+            #selector(useSelectionForFindAction(_:))
+        ]
+        if let action = menuItem.action, findActions.contains(action) {
+            return activeWindowController()?.canFind == true
+        }
+
         let closeActions: Set<Selector> = [
             #selector(closeFileAction(_:)),
             #selector(closeWindowAction(_:))
@@ -246,6 +275,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     @objc private func copyRelativePathAction(_ sender: Any?) {
         activeWindowController()?.copyRelativePath()
+    }
+
+    // MARK: - Edit ▸ Find（转发到当前窗口；查找栏与查找状态在 PreviewWindowController）
+
+    @objc private func findAction(_ sender: Any?) {
+        activeWindowController()?.showFindBar()
+    }
+
+    @objc private func findNextAction(_ sender: Any?) {
+        activeWindowController()?.findNext()
+    }
+
+    @objc private func findPreviousAction(_ sender: Any?) {
+        activeWindowController()?.findPrevious()
+    }
+
+    @objc private func useSelectionForFindAction(_ sender: Any?) {
+        activeWindowController()?.useSelectionForFind()
     }
 
     /// ⌘R：文件树与当前文件一起跟磁盘对一次账。

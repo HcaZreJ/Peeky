@@ -459,6 +459,40 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// WebView 载入完成后要滚到的源行（peeky:// / 初始定位），载入完成即消费清空。
     private var pendingMarkdownScrollLine: Int?
 
+    // MARK: ⌘F 查找的状态
+    /// 内容区顶部的查找栏；隐藏时正文顶到顶栏下沿，显示时正文顶到它的下沿（两组约束互斥）。
+    private let findBar = FindBarView()
+    private var contentTopToHeaderConstraints: [NSLayoutConstraint] = []
+    private var contentTopToFindBarConstraints: [NSLayoutConstraint] = []
+    /// Markdown 页面端的查找脚本（`window.peekyFind`），每次载入都带上。
+    private let findUserScript = WKUserScript(
+        source: MarkdownFindScript.userScriptSource,
+        injectionTime: .atDocumentEnd,
+        forMainFrameOnly: true
+    )
+    /// 搜索词：收起查找栏后保留，下次 ⌘F 原样带回。
+    private var findQuery = ""
+    /// 与其它 app 共用的查找剪贴板（macOS 惯例：在别处 ⌘E 过的词，这里 ⌘F 就带出来）。测试换成私有的一块。
+    var findPasteboard = NSPasteboard(name: .find)
+    private var findResult = TextSearch.Result.empty
+    private var findCurrentIndex: Int?
+    /// 当前匹配是否已经在视野里（滚过去了或本来就看得见）。没有的话第一次「下一个」先滚到它，
+    /// 不跳过它——查找栏带着旧搜索词重新打开、文件内容变了重查时都不主动滚动。
+    private var isFindCurrentRevealed = false
+    /// 每发起一次查找递增；迟到的结果（打字更快、换了文件）据此丢弃。
+    private var findSearchSequence = 0
+    private var findCancellation: FindCancellation?
+    /// 代码视图全文的快照，文本内容一变就清空（见 textStorage 的编辑通知）。
+    private var textFindCorpus: String?
+    private var isFindRefreshScheduled = false
+    /// Markdown 页面拼出的可见文字；换页即清空。
+    private var markdownFindCorpus: String?
+    /// 每次 loadHTMLString 递增；页面端的回调据此认出是不是还是同一页。
+    private var markdownPageGeneration = 0
+    /// 当前页 didFinish 之前页面端脚本还不能用，查找推迟到 didFinish 再跑。
+    private var isMarkdownPageLoaded = false
+    private nonisolated(unsafe) var textStorageEditObserver: NSObjectProtocol?
+
     private var tabs: [PreviewTab] = []
     private var activeTabID: UUID?
     private var wrapsLines = true
@@ -668,6 +702,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         setupTextView()
         setupStatusBar()
         setupMarkdownWebView()
+        setupFindBar()
         // 浮动选区按钮住 contentView 顶层，必须晚于 scrollView/markdownWebView 加入，
         // 保证其 z-order 覆盖两条渲染路径（addSubview 默认叠在已有 subview 之上）。
         setupSelectionActionButton()
@@ -703,11 +738,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             headerDivider.topAnchor.constraint(equalTo: headerView.bottomAnchor),
             headerDivider.heightAnchor.constraint(equalToConstant: 1),
 
-            scrollView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
 
-            markdownWebView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
             markdownWebView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             markdownWebView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             markdownWebView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
@@ -715,8 +748,22 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
             statusBarView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             statusBarView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             statusBarView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            statusBarView.heightAnchor.constraint(equalToConstant: 22)
+            statusBarView.heightAnchor.constraint(equalToConstant: 22),
+
+            findBar.topAnchor.constraint(equalTo: headerDivider.bottomAnchor),
+            findBar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            findBar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            findBar.heightAnchor.constraint(equalToConstant: FindBarView.height)
         ])
+        contentTopToHeaderConstraints = [
+            scrollView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
+            markdownWebView.topAnchor.constraint(equalTo: headerView.bottomAnchor)
+        ]
+        contentTopToFindBarConstraints = [
+            scrollView.topAnchor.constraint(equalTo: findBar.bottomAnchor),
+            markdownWebView.topAnchor.constraint(equalTo: findBar.bottomAnchor)
+        ]
+        NSLayoutConstraint.activate(contentTopToHeaderConstraints)
         NSLayoutConstraint.activate(emptyStateGroup.constraints(centeredIn: contentView, below: headerDivider.bottomAnchor))
 
         if let dropWindow = window as? DropWindow {
@@ -1380,6 +1427,9 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         if let textViewSelectionObserver {
             NotificationCenter.default.removeObserver(textViewSelectionObserver)
         }
+        if let textStorageEditObserver {
+            NotificationCenter.default.removeObserver(textStorageEditObserver)
+        }
         // selectionDidChange / windowDidResignKey / selectionActionButtonBoundsDidChange
         // 均以 self 为 selector-based observer 注册，一并摘除。
         // selectionUpdateTimer 的 block 用 [weak self]，self 释放后 fire 自然 no-op，
@@ -1399,6 +1449,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
 
         markdownWebView.configuration.userContentController.add(self, name: "peekySelection")
         markdownWebView.configuration.userContentController.addUserScript(selectionUserScript)
+        markdownWebView.configuration.userContentController.addUserScript(findUserScript)
     }
 
     /// 本次载入要注入的脚本：选区监听总是带上，画 Mermaid 图时再加 mermaid.js。
@@ -1406,6 +1457,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         let controller = markdownWebView.configuration.userContentController
         controller.removeAllUserScripts()
         controller.addUserScript(selectionUserScript)
+        controller.addUserScript(findUserScript)
         if rendersDiagrams, let mermaidUserScript {
             controller.addUserScript(mermaidUserScript)
         }
@@ -2007,6 +2059,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func renderError(message: String, url: URL) {
+        hideFindBarWithoutSelecting()
         titleLabel.stringValue = url.lastPathComponent
         metaLabel.stringValue = "Open failed"
         modeControl.isEnabled = false
@@ -2055,6 +2108,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         let rendersDiagrams = rendered.hasMermaid && mermaidUserScript != nil
         installMarkdownUserScripts(rendersDiagrams: rendersDiagrams)
         let html = MarkdownHTMLRenderer.documentHTML(bodyHTML: rendered.html, css: githubMarkdownCSS, rendersDiagrams: rendersDiagrams)
+        resetFindForNewMarkdownPage()
         markdownWebView.loadHTMLString(html, baseURL: nil)
 
         rebuildMarkdownOutline(rendered.outline)
@@ -2111,6 +2165,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     /// WebView 载入完成：若有待定源行，滚到 sourceLine 不超过它的最后一个标题（就近定位）。
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard webView === markdownWebView else { return }
+        markdownPageDidFinishLoading()
 
         // 原地重读留下的阅读位置优先于跳行：这一次加载不是「打开文件」而是「内容变了」。
         if let scrollY = pendingMarkdownScrollY {
@@ -2962,6 +3017,7 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     }
 
     private func showEmptyState() {
+        hideFindBarWithoutSelecting()
         updateSidebarVisibility()
         window?.title = "Peeky"
         window?.representedURL = nil
@@ -3115,6 +3171,415 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
     @objc private func revealInFinder(_ sender: Any?) {
         guard let url = activeTab?.url else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    // MARK: - ⌘F 查找：查找栏 + 两条内容视图各自的取文字 / 高亮 / 滚动
+
+    /// 有读成功的文件才能查找；空白窗口与打开失败的页面不能。
+    var canFind: Bool {
+        activeTab?.document != nil
+    }
+
+    var isFindBarShown: Bool {
+        !findBar.isHidden
+    }
+
+    /// 查找栏里的计数文字（「3 of 12」/「No matches」）。
+    var findCountText: String {
+        findBar.countText
+    }
+
+    private func setupFindBar() {
+        findBar.isHidden = true
+        findBar.onQueryChanged = { [weak self] query in
+            self?.findQueryDidChange(query)
+        }
+        findBar.onNext = { [weak self] in
+            self?.findNext()
+        }
+        findBar.onPrevious = { [weak self] in
+            self?.findPrevious()
+        }
+        findBar.onClose = { [weak self] in
+            self?.closeFindBar()
+        }
+        contentView.addSubview(findBar)
+
+        // 文字一变（换文件、磁盘改写后重读、JSON 折叠展开）就作废代码视图的全文快照；查找栏开着时重查。
+        // 只改属性（语法着色、JSON 可见区上色）不算。
+        textStorageEditObserver = NotificationCenter.default.addObserver(
+            forName: NSTextStorage.didProcessEditingNotification,
+            object: textView.textStorage,
+            queue: .main
+        ) { [weak self] notification in
+            let editedCharacters = (notification.object as? NSTextStorage)?.editedMask.contains(.editedCharacters) ?? true
+            guard editedCharacters else { return }
+            MainActor.assumeIsolated {
+                self?.textContentDidChange()
+            }
+        }
+    }
+
+    /// ⌘F：展开查找栏（已展开则回到搜索框），焦点进搜索框并全选。带着上次的搜索词打开时立刻查一遍、
+    /// 画出高亮，但不滚动——按 Enter 才去第一个匹配。
+    func showFindBar() {
+        guard canFind else { return }
+        if findBar.isHidden {
+            if findQuery.isEmpty, let shared = findPasteboard.string(forType: .string) {
+                findQuery = Self.singleLineQuery(shared)
+            }
+            findBar.query = findQuery
+            setFindBarVisible(true)
+            findCurrentIndex = nil
+            runFind(reveal: false)
+        }
+        findBar.focusSearchField()
+    }
+
+    /// ⌘G / Enter / 「下一个」。查找栏收着时先展开并查到视野里或之后的第一个。
+    func findNext() {
+        stepFind(forward: true)
+    }
+
+    /// ⇧⌘G / ⇧Enter / 「上一个」。
+    func findPrevious() {
+        stepFind(forward: false)
+    }
+
+    /// ⌘E：用选中的文字查找，从选区处开始（选中的那一处就是当前匹配）。
+    func useSelectionForFind() {
+        guard canFind else { return }
+        if isMarkdownWebActive {
+            markdownWebView.evaluateJavaScript("window.peekyFind ? window.peekyFind.selectedText() : ''") { [weak self] value, _ in
+                guard let self, let text = value as? String else { return }
+                self.adoptSelectionAsFindQuery(text)
+            }
+        } else {
+            let selection = textView.selectedRange()
+            guard selection.length > 0, let storage = textView.textStorage, NSMaxRange(selection) <= storage.length else { return }
+            adoptSelectionAsFindQuery(storage.attributedSubstring(from: selection).string)
+        }
+    }
+
+    /// Esc / Done：收起查找栏，去掉高亮，当前匹配留成选中文字，焦点回到正文。
+    func closeFindBar() {
+        guard !findBar.isHidden else { return }
+        let currentRange = currentFindRange
+        cancelInFlightFind()
+        if isMarkdownWebActive {
+            markdownWebView.evaluateJavaScript("window.peekyFind && window.peekyFind.clear(\(currentRange != nil))")
+            window?.makeFirstResponder(markdownWebView)
+        } else {
+            textView.findHighlights = nil
+            if let currentRange, let storage = textView.textStorage, NSMaxRange(currentRange) <= storage.length {
+                textView.setSelectedRange(currentRange)
+            }
+            window?.makeFirstResponder(textView)
+        }
+        findResult = .empty
+        findCurrentIndex = nil
+        setFindBarVisible(false)
+    }
+
+    /// 空白窗口、打开失败：没有可查的内容，查找栏直接收起，不留选区。
+    private func hideFindBarWithoutSelecting() {
+        guard !findBar.isHidden else { return }
+        cancelInFlightFind()
+        textView.findHighlights = nil
+        findResult = .empty
+        findCurrentIndex = nil
+        setFindBarVisible(false)
+    }
+
+    private func setFindBarVisible(_ visible: Bool) {
+        if visible {
+            NSLayoutConstraint.deactivate(contentTopToHeaderConstraints)
+            NSLayoutConstraint.activate(contentTopToFindBarConstraints)
+        } else {
+            NSLayoutConstraint.deactivate(contentTopToFindBarConstraints)
+            NSLayoutConstraint.activate(contentTopToHeaderConstraints)
+        }
+        findBar.isHidden = !visible
+        contentView.layoutSubtreeIfNeeded()
+    }
+
+    private func findQueryDidChange(_ query: String) {
+        findQuery = query
+        runFind(reveal: true)
+    }
+
+    private func adoptSelectionAsFindQuery(_ text: String) {
+        let query = Self.singleLineQuery(text)
+        guard !query.isEmpty else { return }
+        findQuery = query
+        findBar.query = query
+        if findBar.isHidden {
+            setFindBarVisible(true)
+        }
+        findCurrentIndex = nil
+        runFind(reveal: true, startsAtSelection: true)
+    }
+
+    private func stepFind(forward: Bool) {
+        guard canFind else { return }
+        guard !findBar.isHidden else {
+            showFindBar()
+            return
+        }
+        guard let index = findCurrentIndex, !findResult.ranges.isEmpty else { return }
+        if forward && !isFindCurrentRevealed {
+            isFindCurrentRevealed = true
+        } else {
+            findCurrentIndex = TextSearch.step(from: index, count: findResult.ranges.count, forward: forward)
+        }
+        updateFindCount()
+        if isMarkdownWebActive {
+            markdownWebView.evaluateJavaScript("window.peekyFind && window.peekyFind.setCurrent(\(findCurrentIndex ?? -1), true)")
+        } else {
+            textView.findHighlights?.currentIndex = findCurrentIndex
+            revealCurrentTextMatch()
+        }
+    }
+
+    private var currentFindRange: NSRange? {
+        guard let findCurrentIndex, findResult.ranges.indices.contains(findCurrentIndex) else { return nil }
+        return findResult.ranges[findCurrentIndex]
+    }
+
+    private func cancelInFlightFind() {
+        findSearchSequence += 1
+        findCancellation?.cancel()
+        findCancellation = nil
+    }
+
+    /// 查一遍当前搜索词。起点：⌘E 时取选区；已有当前匹配时取它（继续打字收窄时留在原处或往后）；
+    /// 否则取视野顶端。`reveal` 为 true 时把当前匹配滚进视野。
+    private func runFind(reveal: Bool, startsAtSelection: Bool = false) {
+        let previousRange = currentFindRange
+        cancelInFlightFind()
+        let sequence = findSearchSequence
+        let query = findQuery
+
+        guard !query.isEmpty else {
+            applyFindResult(.empty, anchor: 0, reveal: false)
+            return
+        }
+        findPasteboard.clearContents()
+        findPasteboard.setString(query, forType: .string)
+
+        if isMarkdownWebActive {
+            runMarkdownFind(query: query, sequence: sequence, previousRange: previousRange, reveal: reveal, startsAtSelection: startsAtSelection)
+            return
+        }
+
+        let corpus: String
+        if let textFindCorpus {
+            corpus = textFindCorpus
+        } else {
+            corpus = textView.string
+            textFindCorpus = corpus
+        }
+        let anchor: Int
+        if startsAtSelection {
+            anchor = textView.selectedRange().location
+        } else {
+            anchor = previousRange?.location ?? textViewportAnchor()
+        }
+        let length = textView.textStorage?.length ?? 0
+        searchFindCorpus(corpus, length: length, query: query, sequence: sequence) { [weak self] result in
+            self?.applyFindResult(result, anchor: anchor, reveal: reveal)
+        }
+    }
+
+    /// 小文档就地查（几毫秒，打字无延迟）；大文档放后台，新一次查找作废上一次。
+    private func searchFindCorpus(
+        _ corpus: String,
+        length: Int,
+        query: String,
+        sequence: Int,
+        completion: @escaping @MainActor (TextSearch.Result) -> Void
+    ) {
+        guard length > Self.inlineFindLimit else {
+            completion(TextSearch.matches(of: query, in: corpus))
+            return
+        }
+        findBar.setCount("Searching…", hasMatches: false)
+        let cancellation = FindCancellation()
+        findCancellation = cancellation
+        let search = Task.detached(priority: .userInitiated) {
+            TextSearch.matches(of: query, in: corpus, isCancelled: { cancellation.isCancelled })
+        }
+        Task { @MainActor [weak self] in
+            let result = await search.value
+            guard let self, sequence == self.findSearchSequence else { return }
+            self.findCancellation = nil
+            completion(result)
+        }
+    }
+
+    /// 超过这么多 UTF-16 单元的文档放到后台查。
+    private static let inlineFindLimit = 2_000_000
+
+    private func runMarkdownFind(query: String, sequence: Int, previousRange: NSRange?, reveal: Bool, startsAtSelection: Bool) {
+        // 页面还没载完：didFinish 时会再查一遍。
+        guard isMarkdownPageLoaded else { return }
+        let pageGeneration = markdownPageGeneration
+        markdownWebView.callAsyncJavaScript(
+            "await (window.peekyDiagramsReady || Promise.resolve()); return window.peekyFind ? window.peekyFind.prepare(haveCorpus, startsAtSelection) : null;",
+            arguments: ["haveCorpus": markdownFindCorpus != nil, "startsAtSelection": startsAtSelection],
+            in: nil,
+            in: .page
+        ) { [weak self] result in
+            guard
+                let self,
+                sequence == self.findSearchSequence,
+                pageGeneration == self.markdownPageGeneration,
+                case let .success(value) = result,
+                let payload = value as? [String: Any]
+            else { return }
+            if let corpus = payload["corpus"] as? String {
+                self.markdownFindCorpus = corpus
+            }
+            guard let corpus = self.markdownFindCorpus else { return }
+            let pageAnchor = (payload["anchor"] as? NSNumber)?.intValue ?? 0
+            let anchor = startsAtSelection ? pageAnchor : (previousRange?.location ?? pageAnchor)
+            self.searchFindCorpus(corpus, length: (corpus as NSString).length, query: query, sequence: sequence) { [weak self] result in
+                self?.applyFindResult(result, anchor: anchor, reveal: reveal)
+            }
+        }
+    }
+
+    private func applyFindResult(_ result: TextSearch.Result, anchor: Int, reveal: Bool) {
+        findResult = result
+        findCurrentIndex = TextSearch.firstIndex(atOrAfter: anchor, in: result.ranges)
+        updateFindCount()
+
+        if isMarkdownWebActive {
+            let flat = result.ranges.flatMap { [$0.location, $0.length] }
+            let pageGeneration = markdownPageGeneration
+            let sequence = findSearchSequence
+            isFindCurrentRevealed = reveal
+            markdownWebView.callAsyncJavaScript(
+                "return window.peekyFind ? window.peekyFind.show(flat, index, reveal) : false;",
+                arguments: ["flat": flat, "index": findCurrentIndex ?? -1, "reveal": reveal],
+                in: nil,
+                in: .page
+            ) { [weak self] result in
+                guard let self, sequence == self.findSearchSequence, pageGeneration == self.markdownPageGeneration else { return }
+                if case let .success(value) = result, (value as? NSNumber)?.boolValue == true {
+                    self.isFindCurrentRevealed = true
+                }
+            }
+        } else {
+            textView.findHighlights = result.ranges.isEmpty ? nil : FindHighlights(ranges: result.ranges, currentIndex: findCurrentIndex)
+            if reveal {
+                isFindCurrentRevealed = true
+                revealCurrentTextMatch()
+            } else {
+                isFindCurrentRevealed = currentFindRange.map(isTextRangeVisible) ?? false
+            }
+        }
+    }
+
+    private func updateFindCount() {
+        findBar.setCount(
+            TextSearch.countText(query: findQuery, currentIndex: findCurrentIndex, result: findResult),
+            hasMatches: !findResult.ranges.isEmpty,
+            isNoMatch: !findQuery.isEmpty && findResult.ranges.isEmpty
+        )
+    }
+
+    /// 代码视图视野顶端第一个字符在全文里的下标。
+    private func textViewportAnchor() -> Int {
+        guard let layoutManager = textView.layoutManager, let textContainer = textView.textContainer else { return 0 }
+        let origin = textView.textContainerOrigin
+        let visible = textView.visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
+        let glyphRange = layoutManager.glyphRange(forBoundingRectWithoutAdditionalLayout: visible, in: textContainer)
+        guard glyphRange.length > 0 else { return 0 }
+        return layoutManager.characterIndexForGlyph(at: glyphRange.location)
+    }
+
+    private func textRect(for range: NSRange) -> NSRect? {
+        guard
+            let layoutManager = textView.layoutManager,
+            let textContainer = textView.textContainer,
+            let storage = textView.textStorage,
+            NSMaxRange(range) <= storage.length
+        else { return nil }
+        layoutManager.ensureLayout(forCharacterRange: range)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let origin = textView.textContainerOrigin
+        return layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer).offsetBy(dx: origin.x, dy: origin.y)
+    }
+
+    private func isTextRangeVisible(_ range: NSRange) -> Bool {
+        guard let rect = textRect(for: range) else { return false }
+        return textView.visibleRect.contains(rect)
+    }
+
+    /// 当前匹配不在视野里就滚过去（放到视野上三分之一处，横向同理），再弹一下系统的查找指示。
+    private func revealCurrentTextMatch() {
+        guard let range = currentFindRange, let rect = textRect(for: range) else { return }
+        let visible = textView.visibleRect
+        let margin = min(24, visible.height / 4)
+        let isVerticallyOut = rect.minY < visible.minY + margin || rect.maxY > visible.maxY - margin
+        let isHorizontallyOut = rect.minX < visible.minX || rect.maxX > visible.maxX
+        if isVerticallyOut || isHorizontallyOut {
+            var target = visible.origin
+            if isVerticallyOut {
+                target.y = rect.minY - visible.height / 3
+            }
+            if isHorizontallyOut {
+                target.x = rect.minX - visible.width / 3
+            }
+            target.x = min(max(0, target.x), max(0, textView.bounds.width - visible.width))
+            target.y = min(max(0, target.y), max(0, textView.bounds.height - visible.height))
+            textView.scroll(target)
+        }
+        textView.showFindIndicator(for: range)
+    }
+
+    /// 代码视图的文字变了：快照作废；查找栏开着就在这一轮事件结束后重查（只画高亮、不滚动）。
+    private func textContentDidChange() {
+        textFindCorpus = nil
+        guard !findBar.isHidden, !isFindRefreshScheduled else { return }
+        isFindRefreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.isFindRefreshScheduled = false
+                guard !self.findBar.isHidden, !self.isMarkdownWebActive, self.canFind else { return }
+                self.findCurrentIndex = nil
+                self.runFind(reveal: false)
+            }
+        }
+    }
+
+    /// 要载入新一页 Markdown：旧页的全文与匹配作废，等 didFinish。
+    private func resetFindForNewMarkdownPage() {
+        cancelInFlightFind()
+        markdownPageGeneration += 1
+        isMarkdownPageLoaded = false
+        markdownFindCorpus = nil
+        findResult = .empty
+        findCurrentIndex = nil
+        textView.findHighlights = nil
+        if !findBar.isHidden {
+            updateFindCount()
+        }
+    }
+
+    /// 新一页载完：查找栏开着就在新页上重查（只画高亮、不滚动，阅读位置交给原有的跳行 / 还原逻辑）。
+    private func markdownPageDidFinishLoading() {
+        isMarkdownPageLoaded = true
+        guard !findBar.isHidden, !findQuery.isEmpty else { return }
+        runFind(reveal: false)
+    }
+
+
+    /// 选中文字或共享查找剪贴板里的多行文字 → 一行搜索词（换行当空白，与「空白匹配任意空白」一致）。
+    private static func singleLineQuery(_ text: String) -> String {
+        String(text.components(separatedBy: .newlines).joined(separator: " ").prefix(1000))
     }
 
     // MARK: - Overflow menu (顶栏 ⋯：当前只 Wrap Lines，未来视图设置扩展点)
@@ -3313,5 +3778,19 @@ final class PreviewWindowController: NSWindowController, NSWindowDelegate, NSMen
         }
 
         return line
+    }
+}
+
+/// 后台查找的取消标记：新一次查找开始时置位，后台循环每找到一批匹配检查一次。
+private final class FindCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+
+    func cancel() {
+        lock.withLock { cancelled = true }
+    }
+
+    var isCancelled: Bool {
+        lock.withLock { cancelled }
     }
 }

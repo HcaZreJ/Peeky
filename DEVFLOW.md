@@ -98,6 +98,7 @@ brew upgrade --cask peeky
 - 顶栏 6 个按钮成组停在窗口右端，拖宽窗口时保持成组、不被拉开；标题过长时中段省略，按钮组位置不动。六颗的图标与 Content / Name / Full path / Rel path / Finder / More 六行文字在浅色深色下都读得清。
 - 打开任意文件，顶栏文件名下面一行以「最后更改于：yyyy 年 MM 月 dd 日 HH:mm:ss」开头，与 Finder 的「修改日期」一致（精确到秒）；在外部改写这个文件，这一段随正文一起刷新；把窗口拖窄，这一行从尾部省略，时间一段最后才被截，按钮组不被挤出窗口。
 - markdown 文件下打开 ⋯ 菜单，Wrap Lines 置灰；切到源码 / JSON 文件后它恢复可用且勾选态正确。
+- ⌘F 查找（Markdown、源码、JSON 三种文件各走一遍，浅色深色各一次）：⌘F 在顶栏下方展开查找栏、焦点进搜索框；打字时所有匹配高亮、计数显示「1 of N」，当前匹配颜色与其余匹配一眼分得开；Enter / ⌘G 下一个、⇧Enter / ⇧⌘G 上一个，末尾回到第一个，视野外的匹配会被滚到视野上部；Esc 或 Done 收起，当前匹配成为选中文字；没有结果时显示「No matches」。选中一个词按 ⌘E，查找栏带着这个词展开、当前匹配就是选中的那一处。窗口拖到最窄，查找栏不把窗口撑宽。
 - `<py / ts / yaml …>` 打开后应显示 Dark Modern 主题高亮，深色背景统一；选中 ⌘C 可复制。
 - `.app` bundle 打包后，执行 `open "peeky://open?path=...&line=N"` 应打开正式版 Peeky 并定位到指定行；`open "peeky-dev://open?path=...&line=N"` 应打开本地 dev 版。
 - 大文件的行为：非 JSON / JSONL 且大于 8 MB 时降级为 raw，不阻塞界面；JSON / JSONL 仍然进行缩进格式化 + 可视区惰性高亮，即使大文件也不阻塞。
